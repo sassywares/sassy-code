@@ -2,17 +2,7 @@
 
 A two-pane tmux control panel for Pi sessions.
 
-```
-┌──────────────────────┬──────────────────────────────────────────┐
-│  Pi sessions — 34    │                                          │
-│  ▾ ~  (4)            │                                          │
-│   · Is there a way …│        resumed pi session lives here      │
-│   · Let's enrich …   │        (press Enter -> focus jumps here)  │
-│  ▾ ~/work/tap2 (25)  │                                          │
-│   ✗ color picker …   │                                          │
-└──────────────────────┴──────────────────────────────────────────┘
-        control panel                    active session
-```
+![sassy-pi: the session control panel on the left and the resumed session on the right](assets/sassy-pi.png)
 
 Session titles are truncated to a single line with an ellipsis; the age is
 right-aligned.
@@ -112,3 +102,4 @@ Status is inferred from the last message:
 - `AGENTS.md` — repository guide for agents and contributors.
 - `CONCEPTS.md` — vocabulary used in this project.
 - `docs/solutions/` — durable learnings from building this.
+- `assets/` — screenshots used in this README.
