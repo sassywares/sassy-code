@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Pi dashboard: left pane = session control panel, right pane = active session.
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PANEL_CMD="python3 '$DIR/panel.py'"
+SESSION="pi-dash"
+WIDTH="${PI_DASHBOARD_WIDTH:-22%}"
+
+ensure_extended_keys() {
+  # Recommended by `docs/tmux.md` so modified Enter works inside Pi.
+  tmux set-option -g extended-keys on 2>/dev/null || true
+  tmux set-option -g extended-keys-format csi-u 2>/dev/null || true
+}
+
+ensure_extended_keys
+
+if [ -n "${TMUX:-}" ]; then
+  # Already inside tmux: keep this pane as the session view, add a narrow
+  # panel pane to its left.
+  SESS="$TMUX_PANE"
+  PANEL_PANE="$(tmux split-window -h -b -l "$WIDTH" -P -F '#{pane_id}')"
+  tmux select-pane -t "$PANEL_PANE"
+  $PANEL_CMD --target "$SESS"
+  tmux select-pane -t "$SESS" 2>/dev/null || true
+else
+  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux new-session -d -s "$SESSION" -n dashboard
+    WIN="$(tmux list-windows -t "$SESSION" -F '#{window_id}' | head -1)"
+    SESS="$(tmux list-panes -t "$WIN" -F '#{pane_id}' | head -1)"
+    PANEL_PANE="$(tmux split-window -h -b -t "$WIN" -l "$WIDTH" -P -F '#{pane_id}')"
+    tmux send-keys -t "$PANEL_PANE" \
+      "$PANEL_CMD --target '$SESS'; tmux kill-window -t '$WIN'" Enter
+    tmux select-pane -t "$PANEL_PANE"   # panel owns the keyboard until Enter
+  fi
+  exec tmux attach -t "$SESSION"
+fi
