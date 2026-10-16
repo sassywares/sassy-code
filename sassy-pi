@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Pi dashboard: left pane = session control panel, right pane = active session.
+# sassy-pi: left pane = session control panel, right pane = active session.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PANEL_CMD="python3 '$DIR/panel.py'"
-SESSION="pi-dash"
-WIDTH="${PI_DASHBOARD_WIDTH:-22%}"
+SESSION="sassy-pi"
+WIDTH="${SASSY_PI_WIDTH:-22%}"
 
 ensure_extended_keys() {
   # Recommended by `docs/tmux.md` so modified Enter works inside Pi.
@@ -25,7 +25,7 @@ if [ -n "${TMUX:-}" ]; then
   tmux select-pane -t "$SESS" 2>/dev/null || true
 else
   if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-    tmux new-session -d -s "$SESSION" -n dashboard
+    tmux new-session -d -s "$SESSION" -n sassy-pi
     WIN="$(tmux list-windows -t "$SESSION" -F '#{window_id}' | head -1)"
     SESS="$(tmux list-panes -t "$WIN" -F '#{pane_id}' | head -1)"
     PANEL_PANE="$(tmux split-window -h -b -t "$WIN" -l "$WIDTH" -P -F '#{pane_id}')"

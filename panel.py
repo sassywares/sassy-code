@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 SESSIONS_DIR = os.environ.get(
     "PI_CODING_AGENT_SESSION_DIR", os.path.expanduser("~/.pi/agent/sessions")
 )
-STATE_FILE = os.path.expanduser("~/.pi/agent/.dashboard-current")
+STATE_FILE = os.path.expanduser("~/.pi/agent/.sassy-pi-current")
 ACTIVE_WINDOW = 300  # seconds -> "active"
 
 # status -> (symbol, color pair index)

@@ -1,4 +1,4 @@
-# Pi Dashboard
+# sassy-pi
 
 A two-pane tmux control panel for Pi sessions.
 
@@ -20,12 +20,12 @@ right-aligned.
 ## Usage
 
 ```bash
-~/pi-dashboard/pi-dash
+sassy-pi
 ```
 
-- Run outside tmux: creates a `pi-dash` session with the two panes.
-- Run inside tmux: splits the current window.
-- `PI_DASHBOARD_WIDTH=25%` overrides the left pane width (default `22%`).
+- Run outside tmux: creates a `sassy-pi` session with the two panes.
+- Run inside tmux: splits the current window and adds the panel to the left.
+- `SASSY_PI_WIDTH=25%` overrides the left pane width (default `22%`).
 
 Keys in the left pane: `↑/↓` or `j/k` move, `g/G` jump, `Enter` resumes a
 session (and focuses the right pane) or collapses/expands a directory, `←/→`
@@ -35,9 +35,9 @@ the panel with your tmux prefix + arrow.
 
 ## How it works
 
-`pi-dash` (bash) creates the layout and passes the right pane's tmux pane id to
-`panel.py`. `panel.py` (Python, stdlib only) reads Pi's session store, renders
-the list with `curses`, and on Enter runs:
+`sassy-pi` (bash) creates the layout and passes the right pane's tmux pane id
+to `panel.py`. `panel.py` (Python, stdlib only) reads Pi's session store,
+renders the list with `curses`, and on Enter runs:
 
 ```bash
 tmux respawn-pane -k -t <right-pane> -c <session-cwd> "pi --session <id>; exec $SHELL"
@@ -64,5 +64,8 @@ Status is inferred from the last message:
 
 ## Files
 
-- `pi-dash` — tmux launcher / layout.
+- `sassy-pi` — tmux launcher / layout.
 - `panel.py` — the curses control panel (`--list` prints a plain-text dump).
+- `AGENTS.md` — repository guide for agents and contributors.
+- `CONCEPTS.md` — vocabulary used in this project.
+- `docs/solutions/` — durable learnings from building this.
