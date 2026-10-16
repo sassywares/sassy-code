@@ -19,6 +19,9 @@ that resumes whichever session is selected.
 
 ## How to run
 
+Requires `tmux`, `python3`, `pi`, and bash. See
+[README § Requirements](README.md#requirements) for install links.
+
 ```bash
 ./sassy-pi                 # or the `sassy-pi` shell alias
 ./panel.py --list          # plain-text dump of parsed sessions, no TUI
