@@ -45,6 +45,12 @@ done or its Pi process has exited. Reaping never touches the foreground session.
 before it is reaped, so a session file that lags the live process cannot cause a
 just-switched-away turn to be killed. *Avoid: delay, timeout.*
 
+**Reload** — the `r` action: typing `/reload` into every managed Pi pane so each
+session discovers extensions, skills, templates, themes, keybindings, and
+context files again, then refreshing the panel's session list. The Pi processes
+stay alive; this is not a restart. It is a deliberate hard refresh and may
+interrupt an in-flight turn. *Avoid: restart, respawn.*
+
 **Placeholder** — a bare shell swapped into the session viewer while a live
 session is preserved in the background, so the visible window can be removed
 without destroying that session.

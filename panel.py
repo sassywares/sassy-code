@@ -390,6 +390,39 @@ def swap_panes(source: str, target: str) -> bool:
     )
 
 
+def send_reload(pane_id: str) -> bool:
+    """Type `/reload` into a Pi pane and submit it."""
+    if not pane_id:
+        return False
+    if not tmux_ok(tmux("send-keys", "-t", pane_id, "-l", "/reload")):
+        return False
+    return tmux_ok(tmux("send-keys", "-t", pane_id, "Enter"))
+
+
+def reload_managed_panes(
+    groups: list[Group],
+    preferred: str = "",
+    procs: list[Proc] | None = None,
+    panes: list[PaneInfo] | None = None,
+    send=send_reload,
+) -> int:
+    """Send `/reload` to every managed pane that still runs Pi.
+
+    This is deliberately unconditional about in-flight turns: reload is a
+    user-requested hard refresh, so the panel does not second-guess it.
+    """
+    procs = process_table() if procs is None else procs
+    if panes is None:
+        _, panes, _ = visible_layout(groups, preferred, procs)
+    count = 0
+    for pane in panes:
+        if not pane.tag or not pane_has_pi(pane, procs):
+            continue
+        if send(pane.id):
+            count += 1
+    return count
+
+
 def _shell() -> str:
     return os.environ.get("SHELL", "/bin/bash")
 
@@ -836,6 +869,55 @@ def group_collapsed(g: Group, collapsed: set[str], flt: str) -> bool:
     return g.cwd in collapsed and not flt
 
 
+FOOTER_ITEMS = (
+    "↑/↓ move",
+    "⏎ present",
+    "n new",
+    "/ filter",
+    "r reload",
+    "q quit",
+)
+
+
+def footer_lines(items, w: int) -> list[str]:
+    """Wrap footer items into as many lines as the panel width needs."""
+    width = max(1, w - 1)
+    lines: list[str] = []
+    line = ""
+    for item in items:
+        candidate = item if not line else f"{line}  {item}"
+        if len(candidate) <= width or not line:
+            line = candidate
+        else:
+            lines.append(line)
+            line = item
+    if line:
+        lines.append(line)
+    return lines
+
+
+def row_key(item):
+    """Stable identity for a row, so selection survives re-sorting."""
+    kind, g, s = item
+    if kind == "session":
+        return ("session", s.id, g.cwd)
+    return ("group", g.cwd)
+
+
+def cursor_for_key(rows, key) -> int:
+    """Index of the row matching *key*, falling back to its group or top."""
+    if key is None:
+        return 0
+    for i, item in enumerate(rows):
+        if row_key(item) == key:
+            return i
+    if key[0] == "session":
+        for i, item in enumerate(rows):
+            if item[0] == "group" and item[1].cwd == key[2]:
+                return i
+    return 0
+
+
 def build_lines(items, w, collapsed: set[str], flt: str):
     """Lay out items into single display lines (one line per item).
 
@@ -877,9 +959,11 @@ def draw(stdscr, groups, flt, cursor, offset, collapsed, message=""):
     if flt:
         stdscr.addnstr(1, 0, f" filter: {flt}", w - 1, curses.A_DIM)
 
+    keys = footer_lines(FOOTER_ITEMS, w)
+    footer_h = len(keys)
     items = list(rows_for(groups, flt, collapsed))
     list_top = 2 if flt else 1
-    avail = max(1, h - list_top - 1)
+    avail = max(1, h - list_top - footer_h)
     if items:
         cursor = min(max(cursor, 0), len(items) - 1)
     else:
@@ -914,9 +998,13 @@ def draw(stdscr, groups, flt, cursor, offset, collapsed, message=""):
             stdscr.addnstr(i + list_top, 0, text.ljust(w - 1), w - 1,
                            attr | (0 if sel else curses.color_pair(color)))
 
-    footer = message or " ↑/↓ move  ⏎ present  n new  r  /  q "
-    stdscr.addnstr(h - 1, 0, footer.ljust(w - 1), w - 1,
-                   curses.A_REVERSE | (curses.A_BOLD if message else 0))
+    footer = footer_lines([message.strip()], w)[:footer_h] if message else keys
+    for i in range(footer_h):
+        text = footer[i] if i < len(footer) else ""
+        stdscr.addnstr(
+            h - footer_h + i, 0, text.ljust(w - 1), w - 1,
+            curses.A_REVERSE | (curses.A_BOLD if message else 0),
+        )
     stdscr.refresh()
     return cursor, offset
 
@@ -950,6 +1038,7 @@ def main_curses(stdscr, target: str):
     groups = load_groups()
     flt = ""
     cursor = offset = 0
+    selected = None  # row_key() of the highlighted row, stable across sorts
     collapsed: set[str] = set()
     reap_state: dict[str, float] = {}
     message = ""
@@ -957,6 +1046,10 @@ def main_curses(stdscr, target: str):
     while True:
         if message and time.time() >= message_until:
             message = ""
+        # Re-derive the cursor from the selected row's identity, not its old
+        # index: a session that starts working moves to the top of the list.
+        rows = list(rows_for(groups, flt, collapsed))
+        cursor = cursor_for_key(rows, selected)
         cursor, offset = draw(
             stdscr, groups, flt, cursor, offset, collapsed, message
         )
@@ -984,9 +1077,19 @@ def main_curses(stdscr, target: str):
         elif ch == ord("r"):
             groups = load_groups()
             refresh_hidden(groups, reap_state, target)
+            count = reload_managed_panes(groups, target)
+            if count:
+                noun = "session" if count == 1 else "sessions"
+                message = f" Reloading {count} {noun} "
+            else:
+                message = " No live sessions to reload "
+            message_until = time.time() + 4
+            continue
         elif ch == ord("/"):
             flt = prompt_filter(stdscr, flt)
             cursor = 0
+            selected = None
+            continue
         elif ch == ord("n"):
             if 0 <= cursor < len(rows):
                 warning = new_session(
@@ -1018,6 +1121,9 @@ def main_curses(stdscr, target: str):
                     else:
                         message = ""
                     groups = load_groups()
+        # Remember identity of the newly highlighted row for the next sort.
+        if rows and 0 <= cursor < len(rows):
+            selected = row_key(rows[cursor])
 
 
 def main():

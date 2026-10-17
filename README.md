@@ -76,7 +76,11 @@ ln -s "$PWD/main" ~/.local/bin/sassy-pi
 Keys in the left pane: `↑/↓` or `j/k` move, `g/G` jump, `Enter` presents a
 session (and focuses the right pane) or collapses/expands a directory, `←/→`
 or `h/l` collapse/expand a directory, `n` new session in the selected project,
-`r` refresh, `/` filter (which auto-expands groups), `q` quit. Quitting moves a
+`r` reload every managed session (sends `/reload` to each live Pi pane and
+refreshes the session list), `/` filter (which auto-expands groups), `q` quit.
+The highlight is attached to the session, not the row, so it follows a session
+as new activity re-sorts the list. The footer wraps to show every binding at the
+default narrow panel width. Quitting moves a
 viewer whose Pi is still running into the background before the panel exits.
 Switch back to the panel with your tmux prefix + arrow. The launcher removes
 repeat from tmux's default repeatable prefix+arrow `select-pane` bindings so the
