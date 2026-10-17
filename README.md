@@ -1,6 +1,7 @@
 # sassy-pi
 
-A two-pane tmux control panel for Pi sessions.
+A two-pane tmux control panel for Pi sessions. Switching sessions keeps
+in-flight work alive in background tmux panes.
 
 ![sassy-pi: the session control panel on the left and the resumed session on the right](assets/sassy-pi.png)
 
@@ -11,7 +12,7 @@ right-aligned.
 
 | Tool | Why it is needed | Install |
 |---|---|---|
-| [tmux](https://github.com/tmux/tmux/wiki/Installing) | creates the two panes and resumes sessions | `brew install tmux` / `sudo apt install tmux` / [other platforms](https://github.com/tmux/tmux/wiki/Installing) |
+| [tmux](https://github.com/tmux/tmux/wiki/Installing) | creates the two panes and keeps background sessions alive | `brew install tmux` / `sudo apt install tmux` / [other platforms](https://github.com/tmux/tmux/wiki/Installing) |
 | [Python 3](https://www.python.org/downloads/) | runs `panel.py` (standard library only) | `brew install python` / `sudo apt install python3` / [python.org](https://www.python.org/downloads/) |
 | [Pi](https://pi.dev) | the sessions this panel manages | `curl -fsSL https://pi.dev/install.sh \| sh` |
 | bash | runs the `main` launcher | preinstalled on macOS and most Linux distributions |
@@ -59,26 +60,71 @@ your `PATH` instead:
 ln -s "$PWD/main" ~/.local/bin/sassy-pi
 ```
 
-Keys in the left pane: `↑/↓` or `j/k` move, `g/G` jump, `Enter` resumes a
+Keys in the left pane: `↑/↓` or `j/k` move, `g/G` jump, `Enter` presents a
 session (and focuses the right pane) or collapses/expands a directory, `←/→`
 or `h/l` collapse/expand a directory, `n` new session in the selected project,
-`r` refresh, `/` filter (which auto-expands groups), `q` quit. Switch back to
-the panel with your tmux prefix + arrow. The launcher removes repeat from
-tmux's default repeatable prefix+arrow `select-pane` bindings so the next
-arrow reaches the panel; bindings with a different command are left alone. A
+`r` refresh, `/` filter (which auto-expands groups), `q` quit. Quitting moves a
+viewer whose Pi is still running into the background before the panel exits.
+Switch back to the panel with your tmux prefix + arrow. The launcher removes
+repeat from tmux's default repeatable prefix+arrow `select-pane` bindings so the
+next arrow reaches the panel; bindings with a different command are left alone. A
 user binding byte-identical to tmux's default is indistinguishable and will
 be normalized.
 
 ## How it works
 
-`main` (bash) creates the layout and passes the right pane's tmux pane id
-to `panel.py`. `panel.py` (Python, stdlib only) reads Pi's session store,
-renders the list with `curses`, and on Enter runs:
+`main` (bash) creates the narrow control panel and the viewer slot, then passes
+the viewer pane id to `panel.py`. `panel.py` (Python, stdlib only, non-blocking)
+reads Pi's session store, renders the list with `curses`, and drives tmux.
+
+Every managed pane carries a pane option, `@sassy_session=<id>`, which is the
+authoritative identity even when panes move. The panel finds its own pane from
+the tmux environment and re-derives the viewer as the other pane in the visible
+window after every swap; pane ids travel with processes, so no cached viewer id
+is trusted.
+
+On `Enter`, the panel:
+
+1. Adopts an existing tagged pane for the session, if one exists.
+2. Otherwise starts `pi --session <id>` in a new hidden single-pane window in
+   the `sassy-pi-bg` session.
+3. Runs `tmux swap-pane -dZ` between that pane and the viewer, then focuses the
+   viewer.
+
+Nothing is respawned or killed to switch. The displaced viewer process is
+swapped into the background session with its process, scrollback, and cwd
+intact. Re-selecting a live session swaps the same pane back instead of starting
+a duplicate.
+
+### Background lifecycle
+
+A hidden pane stays alive while its last turn is unresolved: the last message is
+a user turn or tool result, the assistant is still at `stopReason=toolUse`, or no
+terminal assistant stop reason has been recorded. Once the latest assistant
+message ends with `stop`, `error`, or `aborted`, the panel reaps the hidden pane
+after a short refresh grace period. Switching away always starts that grace
+period instead of killing from a file-only completion; the JSONL can lag the Pi
+process. The visible session is never auto-reaped.
+
+If a hidden Pi exits on its own, the panel detects that the pane has no live
+descendant `pi` process and removes the leftover shell and window. If a session
+is already running outside managed panes, `Enter` is refused with a warning
+until that external process exits.
+
+On `q` (and `Ctrl-C`), a viewer with a live Pi process is swapped into the
+background session behind a temporary placeholder shell, even if the session
+file still looks complete. It survives after the panel exits for as long as the
+tmux server and `sassy-pi-bg` session live. A completed viewer with no live Pi
+does not need preserving.
+
+You can inspect managed panes with:
 
 ```bash
-tmux respawn-pane -k -t <right-pane> -c <session-cwd> "pi --session <id>; exec $SHELL"
-tmux select-pane -t <right-pane>
+tmux list-panes -a -F '#{pane_id} #{session_name} #{@sassy_session}'
 ```
+
+The background session is disposable: `tmux kill-session -t sassy-pi-bg` stops
+any hidden sessions and the panel will recreate it lazily on the next switch.
 
 ## Data source
 
@@ -93,7 +139,7 @@ Status is inferred from the last message:
 
 | status | rule |
 |---|---|
-| running | a live `pi --session <id>` process is in the process table |
+| running | a live `pi --session`/`--session-id` process exists, managed or external |
 | error | last entry is a failed `toolResult` or assistant `error`/`aborted` |
 | active | user spoke last, or modified within 5 minutes |
 | idle | otherwise |
@@ -102,6 +148,7 @@ Status is inferred from the last message:
 
 - `main` — tmux launcher / layout.
 - `panel.py` — the curses control panel (`--list` prints a plain-text dump).
+- `tests/` — isolated tmux lifecycle and key-binding regression tests.
 - `AGENTS.md` — repository guide for agents and contributors.
 - `CONCEPTS.md` — vocabulary used in this project.
 - `docs/solutions/` — durable learnings from building this.

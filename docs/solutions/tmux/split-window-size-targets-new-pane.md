@@ -36,7 +36,7 @@ Create the panel pane with `-b` and let the pre-existing pane be the session
 viewer:
 
 ```bash
-# main:22 and main:31
+# main:56 and main:66
 PANEL_PANE="$(tmux split-window -h -b -l "$WIDTH" -P -F '#{pane_id}')"
 ```
 

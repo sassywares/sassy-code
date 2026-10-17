@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# main: left pane = session control panel, right pane = active session.
+# main: left pane = session control panel, right pane = session viewer.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PANEL_CMD="python3 '$DIR/panel.py'"
+PANEL_CMD="$(printf 'python3 %q' "$DIR/panel.py")"
 SESSION="sassy-pi"
 WIDTH="${SASSY_PI_WIDTH:-22%}"
 
@@ -49,22 +49,27 @@ if [ "${SASSY_PI_TMUX_CONFIG_ONLY:-}" = "1" ]; then
 fi
 
 if [ -n "${TMUX:-}" ]; then
-  # Already inside tmux: keep this pane as the session view, add a narrow
-  # panel pane to its left.
+  # Already inside tmux: keep this pane as the session viewer, add a narrow
+  # panel pane to its left, and run the panel inside that new pane.
   ensure_tmux_config
   SESS="$TMUX_PANE"
   PANEL_PANE="$(tmux split-window -h -b -l "$WIDTH" -P -F '#{pane_id}')"
+  SESS_ARG="$(printf '%q' "$SESS")"
+  PANEL_PANE_ARG="$(printf '%q' "$PANEL_PANE")"
+  tmux send-keys -t "$PANEL_PANE" \
+    "$PANEL_CMD --target $SESS_ARG; tmux kill-pane -t $PANEL_PANE_ARG 2>/dev/null || true" \
+    Enter
   tmux select-pane -t "$PANEL_PANE"
-  $PANEL_CMD --target "$SESS"
-  tmux select-pane -t "$SESS" 2>/dev/null || true
 else
   if ! tmux has-session -t "$SESSION" 2>/dev/null; then
     tmux new-session -d -s "$SESSION" -n sassy-pi
     WIN="$(tmux list-windows -t "$SESSION" -F '#{window_id}' | head -1)"
     SESS="$(tmux list-panes -t "$WIN" -F '#{pane_id}' | head -1)"
     PANEL_PANE="$(tmux split-window -h -b -t "$WIN" -l "$WIDTH" -P -F '#{pane_id}')"
+    SESS_ARG="$(printf '%q' "$SESS")"
+    WIN_ARG="$(printf '%q' "$WIN")"
     tmux send-keys -t "$PANEL_PANE" \
-      "$PANEL_CMD --target '$SESS'; tmux kill-window -t '$WIN'" Enter
+      "$PANEL_CMD --target $SESS_ARG; tmux kill-window -t $WIN_ARG" Enter
     tmux select-pane -t "$PANEL_PANE"   # panel owns the keyboard until Enter
   fi
   ensure_tmux_config

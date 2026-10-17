@@ -9,7 +9,8 @@ updated: 2026-10-17
 ## Context
 
 `sassy-pi` is an external Python program that lists Pi sessions in one tmux pane
-and resumes one in an adjacent pane. The question was whether the whole thing
+and presents one at a time in an adjacent pane, keeping switched-away sessions
+alive in background panes. The question was whether the whole thing
 could be reimplemented as a Pi extension, removing the separate process and the
 bespoke session-file parsing.
 
@@ -25,7 +26,7 @@ not:
 |---|---|
 | List every session with metadata | `SessionManager.listAll()` returns `SessionInfo` (`path`, `id`, `cwd`, `name`, `created`, `modified`, `messageCount`, `firstMessage`, `allMessagesText`) |
 | Select a session in the TUI | `ctx.ui.select()` or `ctx.ui.custom()` with a list component |
-| Resume a chosen session | `ctx.switchSession(sessionPath)` swaps the current Pi into that session **in place** — no tmux, no new process |
+| Present a chosen session | `ctx.switchSession(sessionPath)` swaps the current Pi into that session **in place** — no tmux, no new process, but no way to keep the previous session running in parallel |
 | Start a new session | `ctx.newSession()` |
 
 So there are two viable designs:
