@@ -1,11 +1,24 @@
 # sassy-pi
 
-A two-pane tmux control panel for Pi sessions.
+**A lean, fast tmux control panel for Pi sessions — switch sessions without losing work.**
+
+sassy-pi gives you a two-pane cockpit: a fast session list on the left and the
+live Pi session on the right. Switching keeps in-flight work alive in background
+tmux panes.
 
 ![sassy-pi: the session control panel on the left and the resumed session on the right](assets/sassy-pi.png)
 
 Session titles are truncated to a single line with an ellipsis; the age is
 right-aligned.
+
+## Table of contents
+
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Optional: add an alias](#optional-add-an-alias)
+- [How it works](#how-it-works)
+- [Data source](#data-source)
+- [Files](#files)
 
 ## Requirements
 
