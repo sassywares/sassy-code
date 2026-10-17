@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sassy-pi: left pane = session control panel, right pane = active session.
+# main: left pane = session control panel, right pane = active session.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

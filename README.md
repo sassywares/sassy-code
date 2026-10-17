@@ -14,7 +14,7 @@ right-aligned.
 | [tmux](https://github.com/tmux/tmux/wiki/Installing) | creates the two panes and resumes sessions | `brew install tmux` / `sudo apt install tmux` / [other platforms](https://github.com/tmux/tmux/wiki/Installing) |
 | [Python 3](https://www.python.org/downloads/) | runs `panel.py` (standard library only) | `brew install python` / `sudo apt install python3` / [python.org](https://www.python.org/downloads/) |
 | [Pi](https://pi.dev) | the sessions this panel manages | `curl -fsSL https://pi.dev/install.sh \| sh` |
-| bash | runs the `sassy-pi` launcher | preinstalled on macOS and most Linux distributions |
+| bash | runs the `main` launcher | preinstalled on macOS and most Linux distributions |
 
 Runs on macOS and Linux (including WSL). The panel renders with Python's
 standard-library `curses`, so no extra Python packages are required.
@@ -26,15 +26,14 @@ Clone the repo and run the launcher:
 ```bash
 git clone https://github.com/sassywares/sassy-pi.git
 cd sassy-pi
-./sassy-pi
+./main
 ```
 
-If the file is not executable, either `chmod +x sassy-pi` or run it as
-`bash sassy-pi`.
+If the file is not executable, either `chmod +x main` or run it as `bash main`.
 
 - Run outside tmux: creates a `sassy-pi` session with the two panes.
 - Run inside tmux: splits the current window and adds the panel to the left.
-- `SASSY_PI_WIDTH=25% ./sassy-pi` overrides the left pane width (default `22%`).
+- `SASSY_PI_WIDTH=25% ./main` overrides the left pane width (default `22%`).
 
 ## Optional: add an alias
 
@@ -44,20 +43,20 @@ from inside the cloned repo so `$PWD` resolves to it.
 zsh (`~/.zshrc`):
 
 ```sh
-echo "alias sassy-pi='$PWD/sassy-pi'" >> ~/.zshrc && source ~/.zshrc
+echo "alias sassy-pi='$PWD/main'" >> ~/.zshrc && source ~/.zshrc
 ```
 
 bash (`~/.bashrc`, or `~/.bash_profile` on macOS):
 
 ```sh
-echo "alias sassy-pi='$PWD/sassy-pi'" >> ~/.bashrc && source ~/.bashrc
+echo "alias sassy-pi='$PWD/main'" >> ~/.bashrc && source ~/.bashrc
 ```
 
 Then just run `sassy-pi`. If you prefer a command over an alias, symlink it onto
 your `PATH` instead:
 
 ```sh
-ln -s "$PWD/sassy-pi" ~/.local/bin/sassy-pi
+ln -s "$PWD/main" ~/.local/bin/sassy-pi
 ```
 
 Keys in the left pane: `↑/↓` or `j/k` move, `g/G` jump, `Enter` resumes a
@@ -68,7 +67,7 @@ the panel with your tmux prefix + arrow.
 
 ## How it works
 
-`sassy-pi` (bash) creates the layout and passes the right pane's tmux pane id
+`main` (bash) creates the layout and passes the right pane's tmux pane id
 to `panel.py`. `panel.py` (Python, stdlib only) reads Pi's session store,
 renders the list with `curses`, and on Enter runs:
 
@@ -97,7 +96,7 @@ Status is inferred from the last message:
 
 ## Files
 
-- `sassy-pi` — tmux launcher / layout.
+- `main` — tmux launcher / layout.
 - `panel.py` — the curses control panel (`--list` prints a plain-text dump).
 - `AGENTS.md` — repository guide for agents and contributors.
 - `CONCEPTS.md` — vocabulary used in this project.

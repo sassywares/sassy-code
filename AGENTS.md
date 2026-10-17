@@ -12,7 +12,7 @@ that resumes whichever session is selected.
 
 | Path | Role |
 |---|---|
-| `sassy-pi` | Bash launcher. Builds the tmux layout, passes the viewer pane id to the panel. |
+| `main` | Bash launcher. Builds the tmux layout, passes the viewer pane id to the panel. |
 | `panel.py` | The curses control panel. Reads the Pi session store, renders the list, dispatches actions. |
 | `CONCEPTS.md` | Vocabulary used across the repo. Read before changing user-facing terms. |
 | `docs/solutions/` | Durable learnings. Read the relevant entry before re-investigating a problem. |
@@ -23,7 +23,7 @@ Requires `tmux`, `python3`, `pi`, and bash. See
 [README § Requirements](README.md#requirements) for install links.
 
 ```bash
-./sassy-pi                 # or the `sassy-pi` shell alias
+./main                    # or the `sassy-pi` shell alias
 ./panel.py --list          # plain-text dump of parsed sessions, no TUI
 ```
 
