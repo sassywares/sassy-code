@@ -63,7 +63,11 @@ Keys in the left pane: `↑/↓` or `j/k` move, `g/G` jump, `Enter` resumes a
 session (and focuses the right pane) or collapses/expands a directory, `←/→`
 or `h/l` collapse/expand a directory, `n` new session in the selected project,
 `r` refresh, `/` filter (which auto-expands groups), `q` quit. Switch back to
-the panel with your tmux prefix + arrow.
+the panel with your tmux prefix + arrow. The launcher removes repeat from
+tmux's default repeatable prefix+arrow `select-pane` bindings so the next
+arrow reaches the panel; bindings with a different command are left alone. A
+user binding byte-identical to tmux's default is indistinguishable and will
+be normalized.
 
 ## How it works
 
