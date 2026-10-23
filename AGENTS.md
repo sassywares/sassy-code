@@ -73,7 +73,10 @@ duplicated.
   a managed session: that kills in-flight work.
 - **Pane tags are identity.** `@sassy_session=<id>` travels with the pane and is
   authoritative after swaps and panel restarts. Re-query the viewer slot after
-  every swap; do not cache pane ids.
+  every swap; do not cache pane ids. A tag can lag an in-process switch (and a
+  handoff from a handoff can make the successor a sibling, not a child), so
+  resolve the live session with `pane_switch_target()`, which checks the tag
+  *and* the pane's command line; never trust the command line alone.
 - **Background work is lazy.** Only sessions opened through the panel get live
   panes. A working hidden pane survives; a completed hidden pane is reaped after
   the refresh grace. Remove leftover shells with no descendant `pi`.

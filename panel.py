@@ -594,6 +594,35 @@ def managed_process_pids(panes: list[PaneInfo], procs: list[Proc]) -> set[int]:
     return descendants({p.pid for p in panes if p.pid}, procs)
 
 
+def pane_switch_target(
+    pane: PaneInfo,
+    sessions: dict[str, Session],
+    children: dict[str, list[Session]],
+    claimed: set[str] | frozenset[str],
+    procs: list[Proc],
+) -> Session | None:
+    """The session this pane runs now, following in-process switches.
+
+    A pane's tag is authoritative, but it can lag the process in two ways:
+    adoption may not have run yet, and some switches record the session the Pi
+    process was *started* with as `parentSession` instead of the one it replaces
+    (so a handoff child can be a sibling of the previous child, not its child).
+    Follow both the tag and the pane's command line and keep the newest session
+    reached, ignoring sessions another pane or process holds.
+    """
+    candidates = []
+    for sid in {pane.tag, pane_running_session(pane, procs)}:
+        s = find_session(sessions, sid or "")
+        if s is None:
+            continue
+        candidates.append(
+            switched_session(s, children, claimed - {pane.tag or "", sid})
+        )
+    if not candidates:
+        return None
+    return max(candidates, key=lambda s: (s.created, s.last_ts))
+
+
 def find_managed_pane(
     session_id: str,
     panes: list[PaneInfo],
@@ -638,8 +667,10 @@ def adopt_running_panes(
     """Tag panes with the session they now run, after restarts and handoffs.
 
     A pane's tag can lag the process: `/handoff` replaces the session inside
-    the same Pi process without changing its command line. Follow the
-    `parentSession` link to the successor so the pane keeps one identity.
+    the same Pi process without changing its command line, and a handoff from a
+    handoff can record the original session as `parentSession`, making the new
+    session a sibling of the previous child. `pane_switch_target()` resolves
+    both, and the pane keeps one identity.
     """
     sessions = session_index(groups)
     children = session_children(sessions)
@@ -649,11 +680,9 @@ def adopt_running_panes(
     for pane in panes:
         if pane.id == panel_id:
             continue
-        sid = pane.tag or pane_running_session(pane, procs)
-        s = sessions.get(sid) or find_session(sessions, sid or "")
-        if s is None:
+        target = pane_switch_target(pane, sessions, children, claimed, procs)
+        if target is None:
             continue
-        target = switched_session(s, children, claimed - {pane.tag or ""})
         if target.id == pane.tag:
             continue
         if target.id in claimed:
@@ -929,14 +958,14 @@ def load_groups() -> list[Group]:
             groups.setdefault(s.cwd, Group(s.cwd)).sessions.append(s)
 
     # A managed pane's tag is the authority on the session it runs; adoption
-    # keeps it current. Follow a tag in case adoption has not run since an
-    # in-process switch, but never follow it into a session another pane holds.
+    # keeps it current. Resolve each pane the same way adoption does, so a tag
+    # that lags an in-process switch still marks the successor as running.
     children = session_children(sessions)
     live = set()
-    for tag in tagged:
-        s = sessions.get(tag)
-        if s is not None:
-            live.add(switched_session(s, children, tagged - {tag}).id)
+    for pane in panes:
+        target = pane_switch_target(pane, sessions, children, tagged, procs)
+        if target is not None:
+            live.add(target.id)
     # Command lines only identify sessions whose Pi runs outside managed panes,
     # so a pane's stale argv cannot double-count as a still-running session.
     managed = managed_process_pids(panes, procs)
@@ -1055,6 +1084,24 @@ def cursor_for_key(rows, key) -> int:
     return 0
 
 
+def session_root(s: Session, sessions: dict[str, Session]) -> str:
+    """Id of the top-most ancestor recorded for a session.
+
+    Handoff children may parent the session the Pi process was started with
+    rather than their immediate predecessor, so siblings can share a root.
+    """
+    by_path = {x.path: x for x in sessions.values() if x.path}
+    current = s
+    seen = {s.id}
+    for _ in range(8):
+        parent = by_path.get(current.parent_path) if current.parent_path else None
+        if parent is None or parent.id in seen:
+            break
+        current = parent
+        seen.add(current.id)
+    return current.id
+
+
 def follow_viewer_switch(
     selected,
     presented: str,
@@ -1068,7 +1115,9 @@ def follow_viewer_switch(
     Pi process, so the pane is re-tagged with the successor while the panel's
     recorded current session still names the replaced one. Only follow when the
     highlight is on that presented session, so browsing another row is never
-    interrupted.
+    interrupted. The successor must be newer and share the presented session's
+    handoff lineage: a handoff from a handoff can parent the original session,
+    which makes the new session a sibling rather than a child.
     """
     if not presented or not selected or selected[0] != "session":
         return selected, presented
@@ -1082,7 +1131,9 @@ def follow_viewer_switch(
     target = sessions.get(tag)
     if current is None or target is None:
         return selected, presented
-    if switched_session(current, session_children(sessions)).id != target.id:
+    if target.created <= current.created:
+        return selected, presented
+    if session_root(current, sessions) != session_root(target, sessions):
         return selected, presented
     return ("session", target.id, target.cwd), target.id
 
@@ -1235,10 +1286,18 @@ def main_curses(stdscr, target: str):
         if ch == -1:
             groups = load_groups()
             panes, viewer = refresh_hidden(groups, reap_state, target)
-            before = presented
-            selected, presented = follow_viewer_switch(
-                selected, presented, panes, groups, viewer
+            # The highlight is whatever row the cursor is on, even before the
+            # first key press; `selected` is only filled in below a key event.
+            highlight = (
+                row_key(rows[cursor])
+                if rows and 0 <= cursor < len(rows)
+                else selected
             )
+            before = presented
+            highlight, presented = follow_viewer_switch(
+                highlight, presented, panes, groups, viewer
+            )
+            selected = highlight
             if presented != before:
                 _write_state(presented)
             continue

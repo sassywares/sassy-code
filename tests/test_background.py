@@ -368,6 +368,39 @@ class BackgroundLifecycleTests(unittest.TestCase):
         self.assertEqual(key, ("session", "new", str(self.tmp)))
         self.assertEqual(presented, "new")
 
+    def test_second_handoff_from_a_child_follows_the_newest_sibling(self):
+        # The viewer's Pi was started with `root`; every handoff inside it may
+        # record `root` as the parent, so its children are siblings, not a
+        # chain. The pane must still move to the newest one.
+        self.write_session("root", "stop", offset=-600)
+        self.assertIsNone(self.present("root"))
+        pane_id = panel.pane_map(self.panes())["root"]
+
+        self.write_session(
+            "first", "toolUse", offset=-300,
+            parent=self.sessions / "project" / "root.jsonl",
+        )
+        panel.visible_layout(panel.load_groups(), self.original_viewer)
+        self.assertEqual(panel.pane_map(self.panes())["first"], pane_id)
+
+        self.write_session(
+            "second", "toolUse", offset=0,
+            parent=self.sessions / "project" / "root.jsonl",
+        )
+        groups = panel.load_groups()
+        sessions = panel.session_index(groups)
+        self.assertEqual(sessions["second"].status, "running")
+        self.assertNotEqual(sessions["first"].status, "running")
+        self.assertNotEqual(sessions["root"].status, "running")
+
+        _, panes, viewer = panel.visible_layout(groups, self.original_viewer)
+        self.assertEqual(panel.pane_map(panes)["second"], pane_id)
+        key, presented = panel.follow_viewer_switch(
+            ("session", "first", str(self.tmp)), "first", panes, groups, viewer,
+        )
+        self.assertEqual(key, ("session", "second", str(self.tmp)))
+        self.assertEqual(presented, "second")
+
     def test_adoption_after_restart_follows_handoff_to_successor(self):
         self.write_session("old", "stop", offset=-60)
         self.assertIsNone(self.present("old"))

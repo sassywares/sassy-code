@@ -85,6 +85,22 @@ class HighlightFollowTests(unittest.TestCase):
         self.assertEqual(key, ("session", "new", "/proj"))
         self.assertEqual(presented, "new")
 
+    def test_highlight_follows_a_sibling_successor(self):
+        # A handoff from a handoff can parent the session the Pi process was
+        # started with, making the two children siblings rather than a chain.
+        root = session("root", "/proj", 50.0)
+        old = session("old", "/proj", 100.0)
+        old.parent_path = root.path
+        new = session("new", "/proj", 200.0)
+        new.parent_path = root.path
+        groups = [panel.Group("/proj", [new, old, root])]
+        key, presented = panel.follow_viewer_switch(
+            ("session", "old", "/proj"), "old",
+            [pane("%2", "new")], groups, "%2",
+        )
+        self.assertEqual(key, ("session", "new", "/proj"))
+        self.assertEqual(presented, "new")
+
     def test_highlight_stays_when_browsing_another_row(self):
         groups = self.switched()
         key, presented = panel.follow_viewer_switch(

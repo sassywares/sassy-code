@@ -119,7 +119,10 @@ a duplicate.
 so the pane's command line and `@sassy_session` option keep naming the old
 session. The panel follows the successor recorded in the new file's
 `parentSession` header, re-tags the pane with it, and moves the **running**
-marker to that session. When the switched session is the one in the viewer, the
+marker to that session. A second handoff can record the session the process was
+started with as its parent, making the two successors siblings; the panel
+resolves the pane from both its tag and its command line and keeps the newest
+session in that lineage. When the switched session is the one in the viewer, the
 sidebar highlight (and the recorded current session) moves to the successor on
 the next refresh; browsing another row is never interrupted. A just-created
 session therefore reads `now` and is recognised as already open.
@@ -170,7 +173,7 @@ viewer's local zone):
 
 | status | rule |
 |---|---|
-| running | a live `pi --session`/`--session-id` process runs this session, including a `/handoff`/`/fork` successor of the session it was started with |
+| running | a live `pi --session`/`--session-id` process runs this session, including a `/handoff`/`/fork` successor of the session it was started with, or the newest session reachable from a managed pane's tag and command line |
 | error | last entry is a failed `toolResult` or assistant `error`/`aborted` |
 | active | user spoke last, or modified within 5 minutes |
 | idle | otherwise |

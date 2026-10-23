@@ -75,7 +75,11 @@ pane with the successor. *Avoid: reopen, relaunch.*
 
 **Successor** — the session a pane now runs after an in-process switch. It is
 identified by `parentSession` plus a header timestamp later than the previous
-session's last activity, not by the pane's command line.
+session's last activity, never by the pane's command line alone. A handoff from
+a handoff can record the session the Pi process was *started* with as
+`parentSession`, so two successors may be **siblings** of the same root rather
+than a parent/child chain; the panel follows the newest unclaimed session in
+that shared **handoff lineage**.
 
 **Status inference** — deriving a session's state from its last recorded message
 and from live processes, rather than from a state Pi pushes.

@@ -3,7 +3,7 @@ title: Track the highlighted row by identity so it survives re-sorting
 category: tui
 tags: [curses, sorting, selection, cursor]
 created: 2026-02-14
-updated: 2026-02-14
+updated: 2026-10-23
 ---
 
 ## Problem
@@ -47,5 +47,10 @@ sort keys.
 
 A session can also change identity in place (`/handoff`, `/fork`, `/clone`),
 rather than just moving to another row. `follow_viewer_switch()` then moves the
-highlight to the successor of the presented session; see
+highlight to the successor of the presented session. The successor test uses the
+shared handoff lineage, not a direct parent link, because a handoff from a
+handoff can parent the session the Pi process was started with (making the new
+session a sibling of the previous child). The idle refresh passes the row under
+the cursor as the highlight anchor, so the follow also works before the first
+key press. See
 [`../tmux/in-process-session-switches.md`](../tmux/in-process-session-switches.md).

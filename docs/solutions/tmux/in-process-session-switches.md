@@ -44,19 +44,25 @@ Parse `parentSession` into `Session.parent_path` and follow the link:
   hops so a malformed store cannot loop.- `adopt_running_panes()` re-tags a pane with its successor, not just untagged
   panes. It refuses to steal a successor that another pane or process already
   holds, so a fork opened separately keeps its own identity.
+- `pane_switch_target()` resolves the session a pane runs from **both** its tag
+  and its command line, keeping the newest reachable session. The tag alone is
+  not enough: adoption can itself lag a second switch, and Pi may record the
+  session the process was *started* with as `parentSession`.
 - `load_groups()` marks the followed session as **running**, not the argv id.
-  A managed pane's tag is authoritative; process command lines only count for
-  Pi processes outside managed panes, so a pane's stale argv cannot mark the
-  replaced session running too.
+  Each managed pane is resolved the same way as adoption, so a tag that lags an
+  in-process switch still marks the successor running. Process command lines
+  only count for Pi processes outside managed panes, so a pane's stale argv
+  cannot mark the replaced session running too.
 - `follow_viewer_switch()` moves the highlight (and the recorded current
-  session) when the viewer pane's tag becomes a successor of the presented
-  session. A highlight on any other row is left alone, so browsing is never
-  interrupted, and a deliberately reopened parent keeps its own row.
+  session) when the viewer pane's tag becomes a newer session in the presented
+  session's handoff lineage. A highlight on any other row is left alone, so
+  browsing is never interrupted, and a deliberately reopened parent keeps its
+  own row.
 - `present_session()` prefers the pane already in the viewer when a session has
   more than one tagged pane, so `Enter` focuses it instead of swapping a stale
   duplicate into view. `find_managed_pane()` skips tagged panes, so asking for
-the session a pane *used* to run starts it in a new pane instead of relabelling
-  the live successor.
+  the session a pane *used* to run starts it in a new pane instead of
+  relabelling the live successor.
 
 The `created > last_ts` test matters: `/fork` from an earlier user message
 copies entries with their original timestamps, so activity alone cannot reveal
@@ -64,6 +70,24 @@ the switch. A completed stale branch that was never live in this pane is not
 followed, and a completed copy (`/clone`, branch-at-tip) starts being followed
 once it records new activity. That keeps a live idle parent from being re-tagged
 by a fork or clone that exited elsewhere.
+
+## Sibling successors
+
+A `/handoff` from a session that was itself produced by a handoff may record the
+**root** session file (the one the Pi process was started with) as
+`parentSession`, not the immediate predecessor. The children are then siblings:
+
+```text
+root (argv) ─┬─ first handoff
+             └─ second handoff   <- the pane now runs this one
+```
+
+Starting from the pane's tag (`first handoff`) finds no children, so a tag-only
+resolution would freeze the pane and its status on the stale sibling. Resolve
+from the command line too: the pane's shell still carries `--session root`, and
+the newest unclaimed child of that root is the live session. Never let the argv
+session itself block the walk — it is the pane's own identity, not another
+pane's.
 
 ## Prevention
 
@@ -79,5 +103,7 @@ When changing identity logic, verify with:
 tmux list-panes -a -F '#{pane_id} #{session_name} #{@sassy_session}'
 ```
 
-Two panes for one session, or a tag that lags a `/handoff`, means identity was
-read from the command line again instead of following the session store.
+Two panes for one session, or a pane whose tag is an older sibling of the
+newest child, means identity was read from one source only.
+`tests/test_background.py::test_second_handoff_from_a_child_follows_the_newest_sibling`
+reproduces the sibling case.
