@@ -119,8 +119,10 @@ a duplicate.
 so the pane's command line and `@sassy_session` option keep naming the old
 session. The panel follows the successor recorded in the new file's
 `parentSession` header, re-tags the pane with it, and moves the **running**
-marker to that session. A just-created session therefore reads `now` and is
-recognised as already open.
+marker to that session. When the switched session is the one in the viewer, the
+sidebar highlight (and the recorded current session) moves to the successor on
+the next refresh; browsing another row is never interrupted. A just-created
+session therefore reads `now` and is recognised as already open.
 
 ### Background lifecycle
 

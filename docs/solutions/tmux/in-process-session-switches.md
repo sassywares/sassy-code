@@ -45,9 +45,13 @@ Parse `parentSession` into `Session.parent_path` and follow the link:
   panes. It refuses to steal a successor that another pane or process already
   holds, so a fork opened separately keeps its own identity.
 - `load_groups()` marks the followed session as **running**, not the argv id.
-  It combines the authoritative pane tags with live process command lines and
-  follows both, so a session reopened while its successor still lives is shown
-  as running too.
+  A managed pane's tag is authoritative; process command lines only count for
+  Pi processes outside managed panes, so a pane's stale argv cannot mark the
+  replaced session running too.
+- `follow_viewer_switch()` moves the highlight (and the recorded current
+  session) when the viewer pane's tag becomes a successor of the presented
+  session. A highlight on any other row is left alone, so browsing is never
+  interrupted, and a deliberately reopened parent keeps its own row.
 - `present_session()` prefers the pane already in the viewer when a session has
   more than one tagged pane, so `Enter` focuses it instead of swapping a stale
   duplicate into view. `find_managed_pane()` skips tagged panes, so asking for

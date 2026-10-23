@@ -305,11 +305,6 @@ def running_session_processes(
     return found
 
 
-def running_session_ids(procs: list[Proc] | None = None) -> set[str]:
-    """Best effort: sessions currently resumed with an explicit --session id."""
-    return set(running_session_processes(procs))
-
-
 def tmux(*args: str, timeout: float = 3):
     try:
         return subprocess.run(
@@ -374,13 +369,18 @@ def pane_map(panes: list[PaneInfo]) -> dict[str, str]:
     return {p.tag: p.id for p in panes if p.tag}
 
 
-def managed_pane_tags() -> set[str]:
-    """Session tags of the panes this panel controls, without adopting any."""
+def managed_panes() -> list[PaneInfo]:
+    """Panes the panel controls, not counting the control panel itself."""
     panel_id = panel_pane_id()
     if not panel_id:
-        return set()
+        return []
     window_id = panel_window_id(panel_id)
-    return {p.tag for p in layout_panes(window_id) if p.tag and p.id != panel_id}
+    return [p for p in layout_panes(window_id) if p.id != panel_id]
+
+
+def managed_pane_tags() -> set[str]:
+    """Session tags of the panes this panel controls, without adopting any."""
+    return {p.tag for p in managed_panes() if p.tag}
 
 
 def viewer_pane_id(
@@ -687,12 +687,12 @@ def refresh_hidden(
     groups: list[Group],
     reap_state: dict[str, float],
     preferred: str = "",
-) -> list[PaneInfo]:
+) -> tuple[list[PaneInfo], str]:
     """Adopt tagged panes and reap completed/exited background sessions."""
     procs = process_table()
-    _, panes, _ = visible_layout(groups, preferred, procs)
+    _, panes, viewer = visible_layout(groups, preferred, procs)
     reap_hidden(panes, groups, procs, reap_state)
-    return panes
+    return panes, viewer
 
 
 def reap_hidden(
@@ -727,6 +727,14 @@ def reap_hidden(
     for pane_id in list(reap_state):
         if pane_id not in hidden_ids:
             reap_state.pop(pane_id, None)
+
+
+def _read_state() -> str:
+    try:
+        with open(STATE_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
 
 def _write_state(session_id: str) -> None:
@@ -898,8 +906,10 @@ def preserve_active_on_quit(
 
 
 def load_groups() -> list[Group]:
-    running = running_session_ids()
-    tagged = managed_pane_tags()
+    procs = process_table()
+    panes = managed_panes()
+    running = running_session_processes(procs)
+    tagged = {p.tag for p in panes if p.tag}
     groups: dict[str, Group] = {}
     sessions: dict[str, Session] = {}
     try:
@@ -918,17 +928,28 @@ def load_groups() -> list[Group]:
             sessions.setdefault(s.id, s)
             groups.setdefault(s.cwd, Group(s.cwd)).sessions.append(s)
 
-    # A running process names the session it was started with, but `/handoff`
-    # and friends replace the session in place without changing the command
-    # line. Managed pane tags are authoritative for the panes they control;
-    # follow both to the successor instead of marking the replaced session.
+    # A managed pane's tag is the authority on the session it runs; adoption
+    # keeps it current. Follow a tag in case adoption has not run since an
+    # in-process switch, but never follow it into a session another pane holds.
     children = session_children(sessions)
-    claimed = set(running) | tagged
     live = set()
-    for ident in tagged | set(running):
-        s = sessions.get(ident) or find_session(sessions, ident)
+    for tag in tagged:
+        s = sessions.get(tag)
         if s is not None:
-            live.add(switched_session(s, children, claimed - {ident}).id)
+            live.add(switched_session(s, children, tagged - {tag}).id)
+    # Command lines only identify sessions whose Pi runs outside managed panes,
+    # so a pane's stale argv cannot double-count as a still-running session.
+    managed = managed_process_pids(panes, procs)
+    external = {
+        sid: {pid for pid in pids if pid not in managed}
+        for sid, pids in running.items()
+    }
+    external = {sid: pids for sid, pids in external.items() if pids}
+    claimed = tagged | set(external)
+    for sid in external:
+        s = sessions.get(sid) or find_session(sessions, sid)
+        if s is not None:
+            live.add(switched_session(s, children, claimed - {sid}).id)
     for s in sessions.values():
         if s.id in live:
             s.status = "running"
@@ -1032,6 +1053,38 @@ def cursor_for_key(rows, key) -> int:
             if item[0] == "group" and item[1].cwd == key[2]:
                 return i
     return 0
+
+
+def follow_viewer_switch(
+    selected,
+    presented: str,
+    panes: list[PaneInfo],
+    groups: list[Group],
+    viewer: str,
+):
+    """Move the highlight to the session the viewer's pane now runs.
+
+    `/handoff`, `/fork`, and `/clone` replace the session inside the viewer's
+    Pi process, so the pane is re-tagged with the successor while the panel's
+    recorded current session still names the replaced one. Only follow when the
+    highlight is on that presented session, so browsing another row is never
+    interrupted.
+    """
+    if not presented or not selected or selected[0] != "session":
+        return selected, presented
+    if selected[1] != presented:
+        return selected, presented
+    tag = next((p.tag for p in panes if p.id == viewer), "")
+    if not tag or tag == presented:
+        return selected, presented
+    sessions = session_index(groups)
+    current = sessions.get(presented)
+    target = sessions.get(tag)
+    if current is None or target is None:
+        return selected, presented
+    if switched_session(current, session_children(sessions)).id != target.id:
+        return selected, presented
+    return ("session", target.id, target.cwd), target.id
 
 
 def build_lines(items, w, collapsed: set[str], flt: str):
@@ -1155,6 +1208,11 @@ def main_curses(stdscr, target: str):
     flt = ""
     cursor = offset = 0
     selected = None  # row_key() of the highlighted row, stable across sorts
+    presented = _read_state()  # session the viewer was last asked to show
+    if not presented:
+        # No record yet: take the session already in the viewer as presented.
+        _, panes, viewer = visible_layout(groups, target)
+        presented = next((p.tag for p in panes if p.id == viewer), "")
     collapsed: set[str] = set()
     reap_state: dict[str, float] = {}
     message = ""
@@ -1176,7 +1234,13 @@ def main_curses(stdscr, target: str):
             break
         if ch == -1:
             groups = load_groups()
-            refresh_hidden(groups, reap_state, target)
+            panes, viewer = refresh_hidden(groups, reap_state, target)
+            before = presented
+            selected, presented = follow_viewer_switch(
+                selected, presented, panes, groups, viewer
+            )
+            if presented != before:
+                _write_state(presented)
             continue
         rows = list(rows_for(groups, flt, collapsed))
         if ch in (curses.KEY_UP, ord("k")):
@@ -1215,6 +1279,7 @@ def main_curses(stdscr, target: str):
                     message = f" {warning} "
                     message_until = time.time() + 4
                 groups = load_groups()
+                presented = _read_state()
         elif ch in (curses.KEY_LEFT, ord("h")):
             if 0 <= cursor < len(rows) and rows[cursor][0] == "group":
                 collapsed.add(rows[cursor][1].cwd)
@@ -1236,6 +1301,7 @@ def main_curses(stdscr, target: str):
                         message_until = time.time() + 4
                     else:
                         message = ""
+                        presented = s.id
                     groups = load_groups()
         # Remember identity of the newly highlighted row for the next sort.
         if rows and 0 <= cursor < len(rows):

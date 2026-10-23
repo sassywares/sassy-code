@@ -28,6 +28,10 @@ def rows(groups):
     return list(panel.rows_for(groups, "", set()))
 
 
+def pane(pane_id: str, tag: str = "") -> panel.PaneInfo:
+    return panel.PaneInfo(pane_id, "win", "vis", 4242, tag)
+
+
 class SelectionTests(unittest.TestCase):
     def test_session_highlight_follows_resort(self):
         a = session("aaa", "/proj", 100.0)
@@ -61,6 +65,53 @@ class SelectionTests(unittest.TestCase):
         # Session hidden by collapse: highlight its group header.
         self.assertEqual(panel.cursor_for_key(collapsed, key), 0)
         self.assertEqual(panel.cursor_for_key([], key), 0)
+
+
+class HighlightFollowTests(unittest.TestCase):
+    def switched(self):
+        old = session("old", "/proj", 100.0)
+        new = session("new", "/proj", 200.0)
+        new.parent_path = old.path
+        old.last_role = "user"
+        new.last_role = "assistant"
+        return [panel.Group("/proj", [new, old])]
+
+    def test_highlight_moves_to_the_handoff_successor(self):
+        groups = self.switched()
+        key, presented = panel.follow_viewer_switch(
+            ("session", "old", "/proj"), "old",
+            [pane("%1"), pane("%2", "new")], groups, "%2",
+        )
+        self.assertEqual(key, ("session", "new", "/proj"))
+        self.assertEqual(presented, "new")
+
+    def test_highlight_stays_when_browsing_another_row(self):
+        groups = self.switched()
+        key, presented = panel.follow_viewer_switch(
+            ("session", "other", "/proj"), "old",
+            [pane("%2", "new")], groups, "%2",
+        )
+        self.assertEqual(key, ("session", "other", "/proj"))
+        self.assertEqual(presented, "old")
+
+    def test_highlight_stays_when_the_viewer_was_not_retagged(self):
+        groups = self.switched()
+        key, presented = panel.follow_viewer_switch(
+            ("session", "old", "/proj"), "old",
+            [pane("%2", "old")], groups, "%2",
+        )
+        self.assertEqual(key, ("session", "old", "/proj"))
+        self.assertEqual(presented, "old")
+
+    def test_highlight_stays_when_the_viewer_shows_an_unrelated_session(self):
+        groups = self.switched()
+        groups[0].sessions.append(session("elsewhere", "/proj", 50.0))
+        key, presented = panel.follow_viewer_switch(
+            ("session", "old", "/proj"), "old",
+            [pane("%2", "elsewhere")], groups, "%2",
+        )
+        self.assertEqual(key, ("session", "old", "/proj"))
+        self.assertEqual(presented, "old")
 
 
 if __name__ == "__main__":

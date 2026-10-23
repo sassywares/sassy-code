@@ -42,3 +42,10 @@ re-sorting synthetic groups, including group-level rows, collapse fallback, and
 the empty-list case. `tests/test_background.py` continues to cover pane
 lifecycle. Keep cursor state as an identity, never as an index, when adding new
 sort keys.
+
+## Related
+
+A session can also change identity in place (`/handoff`, `/fork`, `/clone`),
+rather than just moving to another row. `follow_viewer_switch()` then moves the
+highlight to the successor of the presented session; see
+[`../tmux/in-process-session-switches.md`](../tmux/in-process-session-switches.md).

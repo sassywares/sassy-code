@@ -354,6 +354,20 @@ class BackgroundLifecycleTests(unittest.TestCase):
         self.assertEqual(panes[0].tag, "new")
         self.assertEqual(self.pi_pid_in(old_pane), old_pid)
 
+        sessions = panel.session_index(panel.load_groups())
+        self.assertEqual(sessions["new"].status, "running")
+        self.assertNotEqual(sessions["old"].status, "running")
+        # The highlight tracks the retagged viewer pane, not the replaced row.
+        _, panes, viewer = panel.visible_layout(
+            panel.load_groups(), self.original_viewer
+        )
+        key, presented = panel.follow_viewer_switch(
+            ("session", "old", str(self.tmp)), "old", panes,
+            panel.load_groups(), viewer,
+        )
+        self.assertEqual(key, ("session", "new", str(self.tmp)))
+        self.assertEqual(presented, "new")
+
     def test_adoption_after_restart_follows_handoff_to_successor(self):
         self.write_session("old", "stop", offset=-60)
         self.assertIsNone(self.present("old"))
