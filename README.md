@@ -52,6 +52,8 @@ If the file is not executable, either `chmod +x main` or run it as `bash main`.
 - Run outside tmux: creates a `sassy-pi` session with the two panes.
 - Run inside tmux: splits the current window and adds the panel to the left.
 - `SASSY_PI_WIDTH=25% ./main` overrides the left pane width (default `22%`).
+- `SASSY_PI_NEW_KEY=C-n ./main` chooses the prefix key for new sessions
+  (default `N`; a key that is already bound is never taken).
 
 ## Optional: add an alias
 
@@ -88,6 +90,10 @@ The highlight is attached to the session, not the row, so it follows a session
 as new activity re-sorts the list. The footer wraps to show every binding at the
 default narrow panel width. Quitting moves a
 viewer whose Pi is still running into the background before the panel exits.
+From anywhere in the window, `prefix + N` asks the panel to run its own `n`
+action — a new session in the project under the sidebar highlight — without
+moving focus, so the keyboard stays in the viewer. The shortcut is installed
+only when that key is free; set `SASSY_PI_NEW_KEY` to choose another.
 Switch back to the panel with your tmux prefix + arrow. The launcher removes
 repeat from tmux's default repeatable prefix+arrow `select-pane` bindings so the
 next arrow reaches the panel; bindings with a different command are left alone. A
@@ -187,7 +193,8 @@ viewer's local zone):
 ## Files
 
 - `main` — tmux launcher / layout.
-- `panel.py` — the curses control panel (`--list` prints a plain-text dump).
+- `panel.py` — the curses control panel (`--list` prints a plain-text dump;
+  `--new-session --pane <id>` is the shortcut entry point).
 - `tests/` — isolated tmux lifecycle and key-binding regression tests.
 - `AGENTS.md` — repository guide for agents and contributors.
 - `CONCEPTS.md` — vocabulary used in this project.

@@ -68,6 +68,7 @@ class BackgroundLifecycleTests(unittest.TestCase):
             "-P", "-F", "#{pane_id}",
         ).strip()
         socket = self.tmux("display", "-p", "#{socket_path}").strip()
+        self.socket = socket
         os.environ["TMUX"] = socket
         os.environ["TMUX_PANE"] = self.panel_id
         os.environ["PATH"] = f"{self.fake_bin}:{self.old_env['PATH'] or ''}"
@@ -195,6 +196,33 @@ class BackgroundLifecycleTests(unittest.TestCase):
         panel.reap_hidden(
             self.panes(), panel.load_groups(), panel.process_table(), state
         )
+
+    def run_panel(self, *args: str):
+        env = os.environ.copy()
+        env["TMUX"] = self.socket
+        return subprocess.run(
+            [sys.executable, str(ROOT / "panel.py"), *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=10,
+        )
+
+    def key_listener(self, marker: Path):
+        code = (
+            "import sys,tty\n"
+            "tty.setraw(0)\n"
+            "open(sys.argv[1], 'w').write(repr(sys.stdin.read(1)))\n"
+        )
+        return [sys.executable, "-c", code, str(marker)]
+
+    def wait_for_file(self, path: Path, timeout: float = 3.0) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if path.exists() and path.read_text():
+                return True
+            time.sleep(0.02)
+        return False
 
     def pi_pid_in(self, pane_id: str):
         pane = self.pane_by_id(pane_id)
@@ -566,6 +594,54 @@ class BackgroundLifecycleTests(unittest.TestCase):
         self.assertIn(sid, warning.lower())
         self.assertEqual(self.visible_viewer(), before)
         self.assertFalse(any(p.tag == sid for p in self.panes()))
+
+    def test_new_session_shortcut_asks_the_panel_without_moving_focus(self):
+        marker = self.tmp / "shortcut-key"
+        win = self.tmux(
+            "new-window", "-d", "-P", "-F", "#{window_id}",
+            "-n", "shortcut", "sleep", "30",
+        ).strip()
+        viewer = self.tmux(
+            "list-panes", "-t", win, "-F", "#{pane_id}"
+        ).splitlines()[0]
+        panel_pane = self.tmux(
+            "split-window", "-h", "-b", "-t", win,
+            "-P", "-F", "#{pane_id}", *self.key_listener(marker),
+        ).strip()
+        self.tmux(
+            "set-option", "-p", "-t", panel_pane,
+            panel.PANEL_OPTION, "1",
+        )
+        self.tmux("select-pane", "-t", viewer)
+
+        result = self.run_panel("--new-session", "--pane", viewer)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.wait_for_file(marker), "panel never received `n`")
+        self.assertEqual(marker.read_text(), repr("n"))
+        active = [
+            line.split()[0]
+            for line in self.tmux(
+                "list-panes", "-t", win, "-F", "#{pane_id} #{pane_active}"
+            ).splitlines()
+            if line.split()[1] == "1"
+        ]
+        self.assertEqual(active, [viewer], "the shortcut must not move focus")
+
+    def test_new_session_shortcut_ignores_a_stale_panel_tag(self):
+        win = self.tmux(
+            "new-window", "-d", "-P", "-F", "#{window_id}",
+            "-n", "stale", "sleep", "30",
+        ).strip()
+        pane = self.tmux(
+            "list-panes", "-t", win, "-F", "#{pane_id}"
+        ).splitlines()[0]
+        # A tag on a non-Python pane is a leftover, not a control panel.
+        self.tmux("set-option", "-p", "-t", pane, panel.PANEL_OPTION, "1")
+
+        result = self.run_panel("--new-session", "--pane", pane)
+
+        self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

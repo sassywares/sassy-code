@@ -51,6 +51,11 @@ The displaced viewer process is swapped into the background, keeping its
 scrollback, cwd, and in-flight turn. The viewer slot is re-derived from the
 panel's tmux window after every swap because pane ids travel with processes.
 There is no Pi API dependency and no server; the session files are the contract.
+The panel also tags its own pane with
+`@sassy_panel`; the launcher binds a free prefix key (default `N`) to
+`panel.py --new-session --pane #{pane_id}`, which finds that tag in the focused
+window and sends the panel its own `n` key. That starts a session in the
+highlighted project without moving focus, and never duplicates the spawn path.
 
 Hidden panes are reaped only when their latest assistant message has a terminal
 stop reason (`stop`, `error`, `aborted`) for the full grace period, or when no
@@ -81,6 +86,10 @@ duplicated.
   handoff from a handoff can make the successor a sibling, not a child), so
   resolve the live session with `pane_switch_target()`, which checks the tag
   *and* the pane's command line; never trust the command line alone.
+- **Shortcuts reuse panel actions.** Bindings run
+  `panel.py --new-session --pane #{pane_id}`, which finds the `@sassy_panel`
+  pane and `send-keys`-es the panel's own key; do not reimplement spawn, swap,
+  or state handling in a binding, and never overwrite a key the user bound.
 - **Background work is lazy.** Only sessions opened through the panel get live
   panes. A working hidden pane survives; a completed hidden pane is reaped after
   the refresh grace. Remove leftover shells with no descendant `pi`.

@@ -34,6 +34,7 @@ SESSION_LIMIT = 5  # sessions shown per project before "… N more"
 
 BG_SESSION = "sassy-pi-bg"
 PANE_OPTION = "@sassy_session"
+PANEL_OPTION = "@sassy_panel"
 REAP_GRACE = 2.0
 TERMINAL_STOP_REASONS = {"stop", "error", "aborted"}
 
@@ -399,6 +400,52 @@ def viewer_pane_id(
 def set_pane_tag(pane_id: str, session_id: str) -> None:
     if pane_id and session_id:
         tmux("set-option", "-p", "-t", pane_id, PANE_OPTION, session_id)
+
+
+def set_panel_tag(pane_id: str) -> None:
+    """Mark this pane as the control panel so external bindings can find it."""
+    if pane_id:
+        tmux("set-option", "-p", "-t", pane_id, PANEL_OPTION, "1")
+
+
+def panel_pane_for(pane_id: str) -> str:
+    """The control panel pane in *pane_id*'s window, if a live one exists.
+
+    The panel tags its own pane (`PANEL_OPTION`). Requiring a Python process in
+    front keeps a stale tag (a crashed panel's pane reused by a shell) from
+    being typed into.
+    """
+    result = tmux("display-message", "-p", "-t", pane_id, "#{window_id}")
+    if not tmux_ok(result):
+        return ""
+    window_id = result.stdout.strip().splitlines()
+    if not window_id or not window_id[0]:
+        return ""
+    fmt = f"#{{pane_id}}\t#{{pane_current_command}}\t#{{{PANEL_OPTION}}}"
+    result = tmux("list-panes", "-t", window_id[0], "-F", fmt)
+    if not tmux_ok(result):
+        return ""
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        while len(parts) < 3:
+            parts.append("")
+        pane, command, tag = parts[:3]
+        if tag.strip() and command.lower().startswith("python"):
+            return pane
+    return ""
+
+
+def request_new_session(pane_id: str) -> bool:
+    """Ask the panel in *pane_id*'s window to start a session in its project.
+
+    Sending the panel's own `n` key keeps one spawn/present path and does not
+    move focus, so the keyboard stays in the viewer.
+    """
+    panel_id = panel_pane_for(pane_id)
+    if not panel_id:
+        tmux("display-message", "sassy-pi: no control panel in this window")
+        return False
+    return tmux_ok(tmux("send-keys", "-t", panel_id, "-l", "n"))
 
 
 def kill_pane(pane_id: str) -> None:
@@ -1383,6 +1430,7 @@ def main_curses(stdscr, target: str):
     stdscr.timeout(2000)
 
     groups = load_groups()
+    set_panel_tag(panel_pane_id())
     flt = ""
     cursor = offset = 0
     selected = None  # row_key() of the highlighted row, stable across sorts
@@ -1512,7 +1560,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", required=False, help="tmux pane id to control")
     ap.add_argument("--list", action="store_true", help="print parsed list and exit")
+    ap.add_argument(
+        "--new-session",
+        action="store_true",
+        help="ask the panel to start a session in its selected project",
+    )
+    ap.add_argument(
+        "--pane",
+        default="",
+        help="tmux pane whose window holds the control panel",
+    )
     args = ap.parse_args()
+
+    if args.new_session:
+        pane = args.pane or os.environ.get("TMUX_PANE", "")
+        if not pane:
+            ap.error("--new-session requires --pane or TMUX_PANE")
+        sys.exit(0 if request_new_session(pane) else 1)
 
     if args.list:
         groups = load_groups()

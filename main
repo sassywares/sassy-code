@@ -28,9 +28,30 @@ ensure_pane_keys() {
   done
 }
 
+ensure_new_session_key() {
+  # A key in the prefix table that runs the panel's `n` binding from anywhere
+  # in the window, so no focus change is needed. Never take a key that is
+  # already bound: tmux defaults and the user's bindings win.
+  local key="${SASSY_PI_NEW_KEY:-N}" current
+  current="$(tmux list-keys -T prefix -F '#{key_command}' "$key" 2>/dev/null || true)"
+  if [ -n "$current" ]; then
+    case "$current" in
+      *--new-session*) ;;   # ours already; refresh the path below
+      *)
+        printf 'sassy-pi: prefix+%s is already bound; not overriding it\n' \
+          "$key" >&2
+        return 0
+        ;;
+    esac
+  fi
+  tmux bind-key -T prefix "$key" run-shell -b \
+    "$PANEL_CMD --new-session --pane #{pane_id}" 2>/dev/null || true
+}
+
 ensure_tmux_config() {
   ensure_extended_keys
   ensure_pane_keys
+  ensure_new_session_key
 }
 
 if [ "${SASSY_PI_TMUX_CONFIG_ONLY:-}" = "1" ]; then

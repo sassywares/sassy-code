@@ -55,6 +55,16 @@ assert_extended_keys() {
   [ "$value" = "csi-u" ] || fail "extended-keys-format is not csi-u: $value"
 }
 
+assert_new_session_key() {
+  local key="${SASSY_PI_NEW_KEY:-N}" binding
+  binding="$(tmux list-keys -T prefix -F '#{key_command}' "$key" 2>/dev/null)" \
+    || fail "prefix+$key is not bound"
+  case "$binding" in
+    *--new-session*--pane*) ;;
+    *) fail "prefix+$key is not the new-session shortcut: $binding" ;;
+  esac
+}
+
 # Scenario 1: cold start with no tmux server or session yet, and no user
 # configuration that could redefine the prefix arrows.
 COLD_DIR="$(mktemp -d)"
@@ -72,6 +82,7 @@ COLD_CONFIG="$(mktemp -d)"
     || fail "launcher failed in cold-start config-only mode"
   assert_extended_keys
   assert_pane_keys
+  assert_new_session_key
 )
 env -u TMUX TMUX_TMPDIR="$COLD_DIR" tmux kill-server 2>/dev/null || true
 rm -rf "$COLD_DIR" "$COLD_HOME" "$COLD_CONFIG"
@@ -93,6 +104,7 @@ SASSY_PI_TMUX_CONFIG_ONLY=1 "$ROOT/main" \
   || fail "launcher failed in config-only mode"
 
 assert_pane_keys
+assert_new_session_key
 
 CUSTOM_AFTER="$(tmux list-keys -T prefix C-g)"
 [ "$CUSTOM_AFTER" = "$CUSTOM_BEFORE" ] \
@@ -103,3 +115,21 @@ case "$CUSTOM_AFTER" in
 esac
 
 printf 'PASS: prefix arrows are non-repeatable select-pane; custom binding preserved\n'
+
+# Scenario 3: the shortcut never overwrites a key the user already bound.
+tmux unbind-key -T prefix N 2>/dev/null || true
+tmux bind-key -T prefix N display-message custom-shortcut
+CUSTOM_BEFORE="$(tmux list-keys -T prefix N)"
+
+SASSY_PI_TMUX_CONFIG_ONLY=1 "$ROOT/main" 2>/dev/null \
+  || fail "launcher failed with a taken shortcut key"
+
+CUSTOM_AFTER="$(tmux list-keys -T prefix N)"
+[ "$CUSTOM_AFTER" = "$CUSTOM_BEFORE" ] \
+  || fail "user shortcut overwritten: $CUSTOM_AFTER"
+case "$CUSTOM_AFTER" in
+  *"display-message custom-shortcut") ;;
+  *) fail "user shortcut changed: $CUSTOM_AFTER" ;;
+esac
+
+printf 'PASS: a taken shortcut key is left alone\n'

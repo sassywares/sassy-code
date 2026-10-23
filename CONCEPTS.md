@@ -23,6 +23,11 @@ session is shown. *Avoid: parked session, suspended session.*
 panes carry the `@sassy_session=<id>` pane option, which travels with the pane
 and is the authoritative session identity after swaps and restarts.
 
+**Panel tag** — the `@sassy_panel=1` pane option the control panel puts on its
+own pane, so a launcher shortcut can find the panel of the current window
+without trusting pane positions. Only a pane whose foreground process is Python
+counts as a live panel.
+
 **Project group** — the set of sessions that share one working directory,
 rendered as a single collapsible heading.
 
