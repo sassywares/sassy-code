@@ -91,7 +91,7 @@ as new activity re-sorts the list. The footer wraps to show every binding at the
 default narrow panel width. Quitting moves a
 viewer whose Pi is still running into the background before the panel exits.
 From anywhere in the window, `prefix + N` asks the panel to run its own `n`
-action — a new session in the project under the sidebar highlight — without
+action — a new session in the project under the panel highlight — without
 moving focus, so the keyboard stays in the viewer. The shortcut is installed
 only when that key is free; set `SASSY_PI_NEW_KEY` to choose another.
 Switch back to the panel with your tmux prefix + arrow. The launcher removes
@@ -135,7 +135,7 @@ marker to that session. A second handoff can record the session the process was
 started with as its parent, making the two successors siblings; the panel
 resolves the pane from both its tag and its command line and keeps the newest
 session in that lineage. When the switched session is the one in the viewer, the
-sidebar highlight (and the recorded current session) moves to the successor on
+panel highlight (and the recorded current session) moves to the successor on
 the next refresh; browsing another row is never interrupted. A just-created
 session therefore reads `now` and is recognised as already open.
 
