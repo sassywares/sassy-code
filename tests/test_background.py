@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -116,12 +117,23 @@ class BackgroundLifecycleTests(unittest.TestCase):
             env=self.tmux_env(),
         )
 
-    def write_session(self, sid: str, stop: str = "toolUse", cwd: str = ""):
-        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    def utc_iso(self, offset: float = 0.0) -> str:
+        """Pi-style UTC timestamp, so ordering is explicit in seconds."""
+        stamp = datetime.now(timezone.utc) + timedelta(seconds=offset)
+        return stamp.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    def write_session(
+        self, sid: str, stop: str = "toolUse", cwd: str = "",
+        parent: str = "", offset: float = 0.0,
+    ):
+        ts = self.utc_iso(offset)
         cwd = cwd or str(self.tmp)
         path = self.sessions / "project" / f"{sid}.jsonl"
+        header = {"type": "session", "id": sid, "cwd": cwd, "timestamp": ts}
+        if parent:
+            header["parentSession"] = str(parent)
         lines = [
-            {"type": "session", "id": sid, "cwd": cwd, "timestamp": ts},
+            header,
             {"type": "message", "timestamp": ts,
              "message": {"role": "user",
                          "content": [{"type": "text", "text": sid}]}},
@@ -135,7 +147,7 @@ class BackgroundLifecycleTests(unittest.TestCase):
 
     def append_stop(self, sid: str, stop: str = "stop"):
         path = self.sessions / "project" / f"{sid}.jsonl"
-        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        ts = self.utc_iso()
         entry = {"type": "message", "timestamp": ts,
                  "message": {"role": "assistant",
                              "content": [{"type": "text", "text": "done"}],
@@ -318,6 +330,65 @@ class BackgroundLifecycleTests(unittest.TestCase):
         self.assertIsNone(self.present("aaa"))
         self.assertEqual(panel.pane_map(self.panes())["aaa"], a_pane)
         self.assertEqual(len([p for p in self.panes() if p.tag == "aaa"]), 1)
+
+    def test_handoff_follows_successor_without_spawning_a_duplicate(self):
+        self.write_session("old", "stop", offset=-60)
+        self.assertIsNone(self.present("old"))
+        old_pane = panel.pane_map(self.panes())["old"]
+        old_pid = self.pi_pid_in(old_pane)
+
+        # `/handoff` replaces the session inside the same Pi process.
+        self.write_session(
+            "new", "toolUse", offset=0,
+            parent=self.sessions / "project" / "old.jsonl",
+        )
+        sessions = panel.session_index(panel.load_groups())
+        self.assertEqual(sessions["new"].status, "running")
+        self.assertNotEqual(sessions["old"].status, "running")
+
+        # The successor is already in the viewer: Enter must focus it, not
+        # start a second Pi for the same session.
+        self.assertIsNone(self.present("new"))
+        panes = [p for p in self.panes() if p.tag in ("old", "new")]
+        self.assertEqual(len(panes), 1)
+        self.assertEqual(panes[0].tag, "new")
+        self.assertEqual(self.pi_pid_in(old_pane), old_pid)
+
+    def test_adoption_after_restart_follows_handoff_to_successor(self):
+        self.write_session("old", "stop", offset=-60)
+        self.assertIsNone(self.present("old"))
+        pane_id = panel.pane_map(self.panes())["old"]
+        self.tmux("set-option", "-p", "-u", "-t", pane_id,
+                  panel.PANE_OPTION)
+
+        self.write_session(
+            "new", "toolUse", offset=0,
+            parent=self.sessions / "project" / "old.jsonl",
+        )
+        groups = panel.load_groups()
+        panel.visible_layout(groups, self.original_viewer)
+        self.assertEqual(panel.pane_map(self.panes())["new"], pane_id)
+
+    def test_reopening_a_replaced_session_starts_a_separate_pane(self):
+        self.write_session("old", "stop", offset=-60)
+        self.assertIsNone(self.present("old"))
+        child_pane = panel.pane_map(self.panes())["old"]
+        self.write_session(
+            "new", "toolUse", offset=0,
+            parent=self.sessions / "project" / "old.jsonl",
+        )
+        panel.visible_layout(panel.load_groups(), self.original_viewer)
+        self.assertEqual(panel.pane_map(self.panes())["new"], child_pane)
+
+        # The pane now runs the successor. Asking for the replaced session must
+        # start it afresh instead of relabelling the live successor's pane.
+        self.assertIsNone(self.present("old"))
+        tags = panel.pane_map(self.panes())
+        self.assertEqual(tags["new"], child_pane)
+        self.assertNotEqual(tags.get("old"), child_pane)
+        sessions = panel.session_index(panel.load_groups())
+        self.assertEqual(sessions["old"].status, "running")
+        self.assertEqual(sessions["new"].status, "running")
 
     def test_new_session_preserves_previous_working_session(self):
         self.write_session("old", "toolUse")

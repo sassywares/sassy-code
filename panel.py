@@ -23,6 +23,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 SESSIONS_DIR = os.environ.get(
     "PI_CODING_AGENT_SESSION_DIR", os.path.expanduser("~/.pi/agent/sessions")
@@ -58,6 +59,7 @@ class Session:
     name: str = ""
     preview: str = ""
     last_user: str = ""
+    parent_path: str = ""
     status: str = "idle"
     messages: int = 0
     last_role: str | None = None
@@ -101,10 +103,23 @@ class PaneInfo:
 
 
 def iso_to_epoch(ts: str) -> float:
-    try:
-        return time.mktime(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))
-    except Exception:
+    """Parse Pi's ISO-8601 timestamps as UTC.
+
+    Pi writes UTC (`...Z`). Parsing them as local time shifted every age by the
+    machine's UTC offset, which made a just-created session look hours old.
+    """
+    if not ts:
         return 0.0
+    value = ts.strip()
+    if value[-1:] in ("Z", "z"):
+        value = value[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return 0.0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
 
 
 def text_of(content) -> str:
@@ -154,6 +169,7 @@ def parse_session(path: str) -> Session | None:
         cwd=header.get("cwd", ""),
         created=iso_to_epoch(header.get("timestamp", "")),
         last_ts=iso_to_epoch(header.get("timestamp", "")),
+        parent_path=header.get("parentSession", "") or "",
     )
 
     last_role = None
@@ -358,6 +374,15 @@ def pane_map(panes: list[PaneInfo]) -> dict[str, str]:
     return {p.tag: p.id for p in panes if p.tag}
 
 
+def managed_pane_tags() -> set[str]:
+    """Session tags of the panes this panel controls, without adopting any."""
+    panel_id = panel_pane_id()
+    if not panel_id:
+        return set()
+    window_id = panel_window_id(panel_id)
+    return {p.tag for p in layout_panes(window_id) if p.tag and p.id != panel_id}
+
+
 def viewer_pane_id(
     panel_id: str, window_id: str, panes: list[PaneInfo], preferred: str = ""
 ) -> str:
@@ -491,6 +516,52 @@ def find_session(
     return None
 
 
+def session_children(
+    sessions: dict[str, Session],
+) -> dict[str, list[Session]]:
+    """Map a session id to sessions switched to from it inside one Pi process."""
+    by_path = {s.path: s for s in sessions.values() if s.path}
+    children: dict[str, list[Session]] = {}
+    for s in sessions.values():
+        parent = by_path.get(s.parent_path) if s.parent_path else None
+        if parent is not None and parent.id != s.id:
+            children.setdefault(parent.id, []).append(s)
+    return children
+
+
+def switched_session(
+    s: Session,
+    children: dict[str, list[Session]],
+    claimed: set[str] | frozenset[str] = frozenset(),
+) -> Session:
+    """Follow an in-process session switch to the session a pane now runs.
+
+    `/handoff`, `/fork`, and `/clone` replace the session inside the same Pi
+    process, so the pane's command line keeps naming the session it was started
+    with. The successor records the old file as its `parentSession`. Follow that
+    link when the successor was created after the current session's last
+    activity, carries newer activity or an unfinished turn, and is not held by
+    another pane or process. Copied history keeps old timestamps, so the header
+    timestamp (`created`) decides whether the switch happened here.
+    """
+    current = s
+    seen = {current.id}
+    for _ in range(8):
+        candidates = [
+            child
+            for child in children.get(current.id, ())
+            if child.id not in seen
+            and child.id not in claimed
+            and child.created > current.last_ts
+            and (child.last_ts > current.last_ts or not child.is_complete())
+        ]
+        if not candidates:
+            break
+        current = max(candidates, key=lambda child: (child.created, child.last_ts))
+        seen.add(current.id)
+    return current
+
+
 def pane_processes(pane: PaneInfo, procs: list[Proc]) -> list[Proc]:
     """Every process in this pane's subtree, including the pane process."""
     if not pane.pid:
@@ -531,7 +602,9 @@ def find_managed_pane(
 ) -> PaneInfo | None:
     """Find a pane already running the session, even before it is tagged."""
     for pane in panes:
-        if pane.id == panel_id or not pane.pid:
+        if pane.id == panel_id or not pane.pid or pane.tag:
+            # A tagged pane already belongs to another session; never relabel
+            # it from its (possibly stale) command line.
             continue
         sid = pane_running_session(pane, procs)
         if sid and (sid == session_id or session_id.startswith(sid)):
@@ -562,19 +635,34 @@ def adopt_running_panes(
     panel_id: str,
     window_id: str,
 ) -> list[PaneInfo]:
-    """Tag panes running a known session, e.g. after a panel restart."""
+    """Tag panes with the session they now run, after restarts and handoffs.
+
+    A pane's tag can lag the process: `/handoff` replaces the session inside
+    the same Pi process without changing its command line. Follow the
+    `parentSession` link to the successor so the pane keeps one identity.
+    """
     sessions = session_index(groups)
-    tags = {p.tag for p in panes if p.tag}
+    children = session_children(sessions)
+    claimed = {p.tag for p in panes if p.tag}
+    claimed |= set(running_session_processes(procs))
     changed = False
     for pane in panes:
-        if pane.id == panel_id or pane.tag:
+        if pane.id == panel_id:
             continue
-        sid = pane_running_session(pane, procs)
-        s = find_session(sessions, sid or "")
-        if not s or s.id in tags:
+        sid = pane.tag or pane_running_session(pane, procs)
+        s = sessions.get(sid) or find_session(sessions, sid or "")
+        if s is None:
             continue
-        set_pane_tag(pane.id, s.id)
-        tags.add(s.id)
+        target = switched_session(s, children, claimed - {pane.tag or ""})
+        if target.id == pane.tag:
+            continue
+        if target.id in claimed:
+            # Another pane or process already holds the successor (for example
+            # a fork that was opened separately). Do not steal its identity.
+            continue
+        claimed.discard(pane.tag or "")
+        claimed.add(target.id)
+        set_pane_tag(pane.id, target.id)
         changed = True
     return layout_panes(window_id) if changed else panes
 
@@ -684,8 +772,19 @@ def present_session(
         return "No session viewer pane found"
 
     panes_by_id = {p.id: p for p in panes}
-    tags = pane_map(panes)
-    target_id = tags.get(s.id)
+    # A session can have more than one tagged pane if a duplicate was spawned by
+    # an older panel. Prefer the pane already showing it so Enter only focuses
+    # the live session instead of swapping a duplicate into the viewer.
+    claimed = [p for p in panes if p.tag == s.id and p.id != panel_id]
+    if claimed:
+        target_id = next((p.id for p in claimed if p.id == viewer), "")
+        if not target_id:
+            target_id = next(
+                (p.id for p in claimed if p.session_name != BG_SESSION),
+                claimed[0].id,
+            )
+    else:
+        target_id = ""
     if not target_id:
         pane = find_managed_pane(s.id, panes, procs, panel_id)
         if pane:
@@ -800,7 +899,9 @@ def preserve_active_on_quit(
 
 def load_groups() -> list[Group]:
     running = running_session_ids()
+    tagged = managed_pane_tags()
     groups: dict[str, Group] = {}
+    sessions: dict[str, Session] = {}
     try:
         dirs = [d for d in os.listdir(SESSIONS_DIR)
                 if os.path.isdir(os.path.join(SESSIONS_DIR, d))]
@@ -814,9 +915,24 @@ def load_groups() -> list[Group]:
             s = parse_session(os.path.join(dpath, fn))
             if not s:
                 continue
-            if any(s.id.startswith(r) for r in running):
-                s.status = "running"
+            sessions.setdefault(s.id, s)
             groups.setdefault(s.cwd, Group(s.cwd)).sessions.append(s)
+
+    # A running process names the session it was started with, but `/handoff`
+    # and friends replace the session in place without changing the command
+    # line. Managed pane tags are authoritative for the panes they control;
+    # follow both to the successor instead of marking the replaced session.
+    children = session_children(sessions)
+    claimed = set(running) | tagged
+    live = set()
+    for ident in tagged | set(running):
+        s = sessions.get(ident) or find_session(sessions, ident)
+        if s is not None:
+            live.add(switched_session(s, children, claimed - {ident}).id)
+    for s in sessions.values():
+        if s.id in live:
+            s.status = "running"
+
     result = list(groups.values())
     for g in result:
         g.sessions.sort(key=lambda s: s.last_ts, reverse=True)

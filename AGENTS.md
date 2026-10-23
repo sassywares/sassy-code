@@ -39,8 +39,12 @@ The launcher self-locates via `BASH_SOURCE`, so it works from any path or symlin
 `panel.py` parses Pi's JSONL session files directly (the session store under
 `~/.pi/agent/sessions/`), groups them by working directory, infers a status and
 turn completion from each file's last message plus a process-table check, and
-renders the result with `curses`. Managed panes are tagged with the tmux pane
-option `@sassy_session=<id>`. On Enter the panel adopts a tagged pane or starts
+renders the result with `curses`. Timestamps are UTC epochs; render them only at
+draw time. Managed panes are tagged with the tmux pane option
+`@sassy_session=<id>`. An in-process switch (`/handoff`, `/fork`, `/clone`)
+leaves that tag and the process command line on the old session, so the panel
+follows the successor's `parentSession` link, re-tags the pane, and moves the
+**running** marker to the successor. On Enter the panel adopts a tagged pane or starts
 `pi --session <id>` in a hidden single-pane window in the dedicated
 `sassy-pi-bg` tmux session, then uses `swap-pane -dZ` to put it in the viewer.
 The displaced viewer process is swapped into the background, keeping its

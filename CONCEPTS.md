@@ -33,7 +33,8 @@ working directory, that the panel reads to build its list.
 
 **Present** — putting a session in the session viewer by swapping its live pane
 with the pane currently there. The displaced process moves to the background; it
-is not killed or respawned. *Avoid: resume, open, launch.*
+is not killed or respawned. A session that is already presented is focused, not
+started again. *Avoid: resume, open, launch.*
 
 **Swap** — the tmux `swap-pane -dZ` operation that exchanges two panes while
 their processes, scrollback, and working directories stay intact.
@@ -65,6 +66,16 @@ terminal assistant stop reason has been recorded yet.
 **External process** — a live Pi process for a session that is running outside
 the managed viewer/background panes. The panel refuses to present that session
 until the external process exits, rather than starting a duplicate.
+
+**In-process switch** — Pi replacing the session inside the same process
+(`/handoff`, `/fork`, `/clone`), so the pane's command line and pane option
+still name the session it was started with. The successor's header records the
+old session file as `parentSession`; the panel follows that link and re-tags the
+pane with the successor. *Avoid: reopen, relaunch.*
+
+**Successor** — the session a pane now runs after an in-process switch. It is
+identified by `parentSession` plus a header timestamp later than the previous
+session's last activity, not by the pane's command line.
 
 **Status inference** — deriving a session's state from its last recorded message
 and from live processes, rather than from a state Pi pushes.

@@ -102,7 +102,9 @@ is trusted.
 
 On `Enter`, the panel:
 
-1. Adopts an existing tagged pane for the session, if one exists.
+1. Adopts an existing tagged pane for the session, if one exists. When a
+   session has more than one tagged pane, the one already in the viewer wins,
+   so `Enter` focuses the live session instead of swapping in a stale copy.
 2. Otherwise starts `pi --session <id>` in a new hidden single-pane window in
    the `sassy-pi-bg` session.
 3. Runs `tmux swap-pane -dZ` between that pane and the viewer, then focuses the
@@ -112,6 +114,13 @@ Nothing is respawned or killed to switch. The displaced viewer process is
 swapped into the background session with its process, scrollback, and cwd
 intact. Re-selecting a live session swaps the same pane back instead of starting
 a duplicate.
+
+`/handoff`, `/fork`, and `/clone` replace the session inside the same Pi process,
+so the pane's command line and `@sassy_session` option keep naming the old
+session. The panel follows the successor recorded in the new file's
+`parentSession` header, re-tags the pane with it, and moves the **running**
+marker to that session. A just-created session therefore reads `now` and is
+recognised as already open.
 
 ### Background lifecycle
 
@@ -149,14 +158,17 @@ Sessions live under `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<id>.jsonl`.
 Each file is JSONL:
 
 - first line: `{"type":"session", "id", "cwd", "timestamp", ...}`
+  (`parentSession` points at the file this session was handed off, forked, or
+  cloned from)
 - `{"type":"session_info", "name"}` — set by `/name`
 - `{"type":"message", "message": {"role", "content", "stopReason", ...}}`
 
-Status is inferred from the last message:
+Status is inferred from the last message (timestamps are UTC, rendered in the
+viewer's local zone):
 
 | status | rule |
 |---|---|
-| running | a live `pi --session`/`--session-id` process exists, managed or external |
+| running | a live `pi --session`/`--session-id` process runs this session, including a `/handoff`/`/fork` successor of the session it was started with |
 | error | last entry is a failed `toolResult` or assistant `error`/`aborted` |
 | active | user spoke last, or modified within 5 minutes |
 | idle | otherwise |
