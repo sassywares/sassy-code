@@ -130,5 +130,111 @@ class HighlightFollowTests(unittest.TestCase):
         self.assertEqual(presented, "old")
 
 
+class SidebarLayoutTests(unittest.TestCase):
+    def group(self, cwd: str, count: int, live: tuple[int, ...] = ()) -> panel.Group:
+        sessions = [
+            session(f"{cwd}-{i}", cwd, 100.0 + i) for i in range(count)
+        ]
+        sessions.sort(key=lambda s: s.last_ts, reverse=True)
+        for i in live:
+            sessions[i].status = "running"
+        return panel.Group(cwd, sessions)
+
+    def test_group_limits_sessions_and_offers_more(self):
+        g = self.group("/proj", 7)
+        items = list(panel.rows_for([g], "", set(), set()))
+        self.assertEqual(
+            [item[0] for item in items],
+            ["group"] + ["session"] * panel.SESSION_LIMIT + ["more"],
+        )
+        self.assertEqual(items[-1][2], 7 - panel.SESSION_LIMIT)  # hidden count
+
+    def test_more_row_reveals_everything_and_collapses_again(self):
+        g = self.group("/proj", 7)
+        items = list(panel.rows_for([g], "", set(), {"/proj"}))
+        self.assertEqual(
+            [item[0] for item in items], ["group"] + ["session"] * 7 + ["more"]
+        )
+        lines, _, _ = panel.build_lines(
+            items, 40, set(), "", {"/proj"}, {"/proj": "proj"}
+        )
+        self.assertEqual(lines[-1][0].strip(), "… show fewer")
+
+    def test_limit_does_not_hide_a_live_session(self):
+        g = self.group("/proj", 7, live=(6,))
+        items = list(panel.rows_for([g], "", set(), set()))
+        shown = [item[2] for item in items if item[0] == "session"]
+        self.assertIn(g.sessions[6], shown)
+        self.assertEqual(len(shown), panel.SESSION_LIMIT + 1)
+        self.assertEqual(items[-1][2], 7 - len(shown))
+
+    def test_filter_shows_every_match(self):
+        # Half the titles match the filter; the limit must not hide them.
+        g = self.group("/proj", 8)
+        for i, s in enumerate(g.sessions):
+            s.preview = f"match {i}"
+        items = list(panel.rows_for([g], "match", set(), set()))
+        self.assertEqual(
+            [item[0] for item in items], ["group"] + ["session"] * 8
+        )
+
+    def test_collapsed_group_shows_neither_sessions_nor_more(self):
+        g = self.group("/proj", 7)
+        items = list(panel.rows_for([g], "", {"/proj"}, set()))
+        self.assertEqual([item[0] for item in items], ["group"])
+
+    def test_cursor_falls_back_to_the_more_row(self):
+        g = self.group("/proj", 7)
+        items = list(panel.rows_for([g], "", set(), set()))
+        hidden = g.sessions[-1]
+        self.assertEqual(
+            items[panel.cursor_for_key(
+                items, ("session", hidden.id, "/proj")
+            )][0],
+            "more",
+        )
+
+    def test_groups_are_separated_by_one_blank_gap(self):
+        one = self.group("/one", 2)
+        two = self.group("/two", 1)
+        items = list(panel.rows_for([one, two], "", set(), set()))
+        lines, starts, heights = panel.build_lines(
+            items, 40, set(), "", set(), {}
+        )
+        preview = [(line[0], line[1]) for line in lines]
+        self.assertEqual([
+            text for text, kind in preview if kind == "gap"
+        ], [""])
+        gap = next(i for i, (_, kind) in enumerate(preview) if kind == "gap")
+        self.assertEqual(preview[0][1], "group")
+        self.assertEqual(preview[gap + 1][1], "group")
+        self.assertEqual(starts[3], gap + 1)  # second group starts after gap
+        self.assertEqual(heights[3], 1)
+
+    def test_single_group_has_no_gap(self):
+        items = list(panel.rows_for([self.group("/one", 2)], "", set(), set()))
+        lines, _, _ = panel.build_lines(items, 40, set(), "", set(), {})
+        self.assertTrue(all(kind != "gap" for _, kind, _ in lines))
+
+    def test_group_names_are_readable_and_unique(self):
+        home = "/home/u"
+        paths = [
+            home,
+            f"{home}/Documents/Workspace/tap2-workspace",
+            "/srv/a/app",
+            "/srv/b/app",
+            "/srv/x/root",
+        ]
+        labels = panel.canonical_group_names(
+            [panel.Group(p) for p in paths], home=home
+        )
+        self.assertEqual(labels[home], "root")
+        self.assertEqual(labels[paths[1]], "tap2-workspace")
+        self.assertEqual(labels["/srv/a/app"], "a/app")
+        self.assertEqual(labels["/srv/b/app"], "b/app")
+        self.assertEqual(labels["/srv/x/root"], "x/root")
+        self.assertEqual(len(set(labels.values())), len(paths))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

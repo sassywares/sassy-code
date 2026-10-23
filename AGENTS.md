@@ -66,6 +66,10 @@ duplicated.
 - **Stdlib only.** `panel.py` relies solely on the Python standard library.
 - **Single line per session.** Titles truncate with `…`; the age is right-aligned.
   Keep the panel narrow and scannable.
+- **Dense projects.** `rows_for()` shows at most `SESSION_LIMIT` sessions per
+  project plus a `more` row; never hide a `running` session. Group headings use
+  `canonical_group_names()` (home is `root`, otherwise the folder name), and one
+  blank `gap` line separates projects.
 - **Narrow panel, wide viewer.** The panel pane is the small one. If a change
   makes the panel wide, the layout is wrong (see `docs/solutions/tmux/`).
 - **Actions are tmux commands from the panel.** The panel never blocks on the

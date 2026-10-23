@@ -30,6 +30,7 @@ SESSIONS_DIR = os.environ.get(
 )
 STATE_FILE = os.path.expanduser("~/.pi/agent/.sassy-pi-current")
 ACTIVE_WINDOW = 300  # seconds -> "active"
+SESSION_LIMIT = 5  # sessions shown per project before "… N more"
 
 BG_SESSION = "sassy-pi-bg"
 PANE_OPTION = "@sassy_session"
@@ -1003,32 +1004,122 @@ def rel_time(ts: float) -> str:
     return f"{int(d // 86400)}d"
 
 
-def shorten_cwd(cwd: str) -> str:
-    home = os.path.expanduser("~")
-    return "~" + cwd[len(home):] if cwd.startswith(home) else cwd
+def group_name(cwd: str, home: str) -> str:
+    """The readable name of a working directory: `root` for home, else its own
+    folder name. Only the *display* name; grouping still keys on the full cwd."""
+    path = os.path.normpath(cwd) if cwd else cwd
+    if path == home:
+        return "root"
+    return os.path.basename(path) or path or "?"
 
 
-def rows_for(groups: list[Group], flt: str, collapsed: set[str] | None = None):
-    """Yield (kind, group, session) rows honoring filter and collapse state."""
+def canonical_group_names(
+    groups: list[Group], home: str | None = None
+) -> dict[str, str]:
+    """Readable, stable names for every group's working directory.
+
+    Home becomes `root`, a project shows just its folder name, and two folders
+    with the same name grow parent components until they are distinguishable
+    (`a/app`, `b/app`). Names depend only on the set of cwds, so they do not
+    change when sessions re-sort.
+    """
+    home = os.path.normpath(os.path.expanduser("~")) if home is None else home
+    cwds: list[str] = []
+    seen: set[str] = set()
+    for g in groups:
+        cwd = os.path.normpath(g.cwd) if g.cwd else g.cwd
+        if cwd not in seen:
+            seen.add(cwd)
+            cwds.append(cwd)
+    parts = {
+        cwd: [p for p in re.split(r"[\\/]+", cwd) if p] for cwd in cwds
+    }
+    labels: dict[str, str] = {}
+    used: set[str] = set()
+    if home in parts:
+        labels[home] = "root"
+        used.add("root")
+    buckets: dict[str, list[str]] = {}
+    for cwd in cwds:
+        if cwd in labels:
+            continue
+        base = group_name(cwd, home)
+        buckets.setdefault(base, []).append(cwd)
+    for base, paths in buckets.items():
+        max_depth = max(len(parts[cwd]) for cwd in paths)
+        # A folder literally named `root` must not shadow home's label.
+        depth = 2 if base in used else 1
+        while depth < max_depth:
+            names = {
+                "/".join(parts[cwd][-depth:]) if parts[cwd] else cwd
+                for cwd in paths
+            }
+            if len(names) == len(paths):
+                break
+            depth += 1
+        for cwd in paths:
+            labels[cwd] = (
+                "/".join(parts[cwd][-depth:]) if parts[cwd] else cwd
+            )
+    return labels
+
+
+def rows_for(
+    groups: list[Group],
+    flt: str,
+    collapsed: set[str] | None = None,
+    expanded: set[str] | None = None,
+    limit: int = SESSION_LIMIT,
+):
+    """Yield (kind, group, payload) rows honoring filter, collapse and limit.
+
+    A project shows at most *limit* sessions, plus a `more` row to reveal the
+    rest. Live sessions stay visible even when they fall past the limit. A
+    filter shows every match, and a collapsed project shows only its heading.
+    """
     collapsed = collapsed or set()
+    expanded = expanded or set()
+    flt_l = flt.lower()
     for g in groups:
         match_sessions = [
             s
             for s in g.sessions
             if not flt
-            or flt.lower() in s.title.lower()
-            or flt.lower() in s.id.lower()
-            or flt.lower() in s.last_user.lower()
+            or flt_l in s.title.lower()
+            or flt_l in s.id.lower()
+            or flt_l in s.last_user.lower()
         ]
-        gm = not flt or flt.lower() in g.cwd.lower()
+        gm = not flt or flt_l in g.cwd.lower()
         if not match_sessions and not gm:
             continue
         yield ("group", g, None)
         # A filter always expands groups so matches stay visible.
         if g.cwd in collapsed and not flt:
             continue
-        for s in match_sessions:
+        limited = (
+            not flt and g.cwd not in expanded and len(match_sessions) > limit
+        )
+        if limited:
+            shown = match_sessions[:limit]
+            shown_ids = {s.id for s in shown}
+            live = [
+                s
+                for s in match_sessions[limit:]
+                if s.status == "running" and s.id not in shown_ids
+            ]
+            if live:
+                shown = sorted(
+                    shown + live, key=lambda s: s.last_ts, reverse=True
+                )
+            hidden = len(match_sessions) - len(shown)
+        else:
+            shown = match_sessions
+            hidden = 0
+        for s in shown:
             yield ("session", g, s)
+        if not flt and len(match_sessions) > limit:
+            # Kept when expanded, so the same row collapses the list again.
+            yield ("more", g, hidden)
 
 
 def group_collapsed(g: Group, collapsed: set[str], flt: str) -> bool:
@@ -1067,19 +1158,26 @@ def row_key(item):
     kind, g, s = item
     if kind == "session":
         return ("session", s.id, g.cwd)
+    if kind == "more":
+        return ("more", g.cwd)
     return ("group", g.cwd)
 
 
 def cursor_for_key(rows, key) -> int:
-    """Index of the row matching *key*, falling back to its group or top."""
+    """Index of the row matching *key*, falling back within its group."""
     if key is None:
         return 0
     for i, item in enumerate(rows):
         if row_key(item) == key:
             return i
-    if key[0] == "session":
+    if key[0] in ("session", "more"):
+        cwd = key[1] if key[0] == "more" else key[2]
+        # A session pushed behind the per-project limit lives under "more".
         for i, item in enumerate(rows):
-            if item[0] == "group" and item[1].cwd == key[2]:
+            if item[0] == "more" and item[1].cwd == cwd:
+                return i
+        for i, item in enumerate(rows):
+            if item[0] == "group" and item[1].cwd == cwd:
                 return i
     return 0
 
@@ -1138,24 +1236,44 @@ def follow_viewer_switch(
     return ("session", target.id, target.cwd), target.id
 
 
-def build_lines(items, w, collapsed: set[str], flt: str):
+def build_lines(
+    items,
+    w: int,
+    collapsed: set[str],
+    flt: str,
+    expanded: set[str] | None = None,
+    labels: dict[str, str] | None = None,
+):
     """Lay out items into single display lines (one line per item).
 
     Returns (lines, starts, heights) where each line is
     (text, kind, item_index) and starts/heights map an item index to its
-    first line and line count.
+    first line and line count. Project groups are separated by a blank gap.
     """
+    expanded = expanded or set()
+    if not labels:
+        labels = canonical_group_names([g for _, g, _ in items])
     lines = []
     starts: dict[int, int] = {}
     heights: dict[int, int] = {}
     for idx, (kind, g, s) in enumerate(items):
+        if kind == "group" and idx > 0:
+            lines.append(("", "gap", -1))
         starts[idx] = len(lines)
         if kind == "group":
             arrow = "▸" if group_collapsed(g, collapsed, flt) else "▾"
-            label = f"{arrow} {shorten_cwd(g.cwd)}  ({len(g.sessions)})"
+            name = labels.get(g.cwd, g.cwd)
+            label = f"{arrow} {name}  ({len(g.sessions)})"
             if len(label) > w - 1:
                 label = label[: max(1, w - 2)] + "…"
             lines.append((label, "group", idx))
+        elif kind == "more":
+            text = (
+                "   … show fewer"
+                if g.cwd in expanded
+                else f"   … {s or 0} more"
+            )
+            lines.append((text, "more", idx))
         else:
             sym, _ = STATUS[s.status]
             suffix = rel_time(s.last_ts)
@@ -1171,7 +1289,9 @@ def build_lines(items, w, collapsed: set[str], flt: str):
     return lines, starts, heights
 
 
-def draw(stdscr, groups, flt, cursor, offset, collapsed, message=""):
+def draw(
+    stdscr, groups, flt, cursor, offset, collapsed, message="", expanded=None
+):
     stdscr.erase()
     h, w = stdscr.getmaxyx()
     title = f" Pi sessions — {sum(len(g.sessions) for g in groups)} sessions "
@@ -1181,7 +1301,7 @@ def draw(stdscr, groups, flt, cursor, offset, collapsed, message=""):
 
     keys = footer_lines(FOOTER_ITEMS, w)
     footer_h = len(keys)
-    items = list(rows_for(groups, flt, collapsed))
+    items = list(rows_for(groups, flt, collapsed, expanded))
     list_top = 2 if flt else 1
     avail = max(1, h - list_top - footer_h)
     if items:
@@ -1189,7 +1309,9 @@ def draw(stdscr, groups, flt, cursor, offset, collapsed, message=""):
     else:
         cursor = 0
 
-    lines, starts, heights = build_lines(items, w, collapsed, flt)
+    lines, starts, heights = build_lines(
+        items, w, collapsed, flt, expanded, canonical_group_names(groups)
+    )
 
     # Keep the whole selected item (which may span several lines) visible.
     if items:
@@ -1206,12 +1328,17 @@ def draw(stdscr, groups, flt, cursor, offset, collapsed, message=""):
         if li >= len(lines):
             break
         text, kind, idx = lines[li]
+        if kind == "gap":
+            continue
         sel = idx == cursor
         attr = curses.A_REVERSE if sel else curses.A_NORMAL
         if kind == "group":
             stdscr.addnstr(i + list_top, 0, text.ljust(w - 1), w - 1,
                            attr | curses.A_BOLD
                            | (0 if sel else curses.color_pair(5)))
+        elif kind == "more":
+            stdscr.addnstr(i + list_top, 0, text.ljust(w - 1), w - 1,
+                           attr | (0 if sel else curses.A_DIM))
         else:
             s = items[idx][2]
             _, color = STATUS[s.status]
@@ -1265,6 +1392,7 @@ def main_curses(stdscr, target: str):
         _, panes, viewer = visible_layout(groups, target)
         presented = next((p.tag for p in panes if p.id == viewer), "")
     collapsed: set[str] = set()
+    expanded: set[str] = set()
     reap_state: dict[str, float] = {}
     message = ""
     message_until = 0.0
@@ -1273,10 +1401,10 @@ def main_curses(stdscr, target: str):
             message = ""
         # Re-derive the cursor from the selected row's identity, not its old
         # index: a session that starts working moves to the top of the list.
-        rows = list(rows_for(groups, flt, collapsed))
+        rows = list(rows_for(groups, flt, collapsed, expanded))
         cursor = cursor_for_key(rows, selected)
         cursor, offset = draw(
-            stdscr, groups, flt, cursor, offset, collapsed, message
+            stdscr, groups, flt, cursor, offset, collapsed, message, expanded
         )
         try:
             ch = stdscr.getch()
@@ -1301,7 +1429,7 @@ def main_curses(stdscr, target: str):
             if presented != before:
                 _write_state(presented)
             continue
-        rows = list(rows_for(groups, flt, collapsed))
+        rows = list(rows_for(groups, flt, collapsed, expanded))
         if ch in (curses.KEY_UP, ord("k")):
             cursor = max(0, cursor - 1)
         elif ch in (curses.KEY_DOWN, ord("j")):
@@ -1340,11 +1468,19 @@ def main_curses(stdscr, target: str):
                 groups = load_groups()
                 presented = _read_state()
         elif ch in (curses.KEY_LEFT, ord("h")):
-            if 0 <= cursor < len(rows) and rows[cursor][0] == "group":
-                collapsed.add(rows[cursor][1].cwd)
+            if 0 <= cursor < len(rows):
+                kind, g, _ = rows[cursor]
+                if kind == "group":
+                    collapsed.add(g.cwd)
+                elif kind == "more":
+                    expanded.discard(g.cwd)
         elif ch in (curses.KEY_RIGHT, ord("l")):
-            if 0 <= cursor < len(rows) and rows[cursor][0] == "group":
-                collapsed.discard(rows[cursor][1].cwd)
+            if 0 <= cursor < len(rows):
+                kind, g, _ = rows[cursor]
+                if kind == "group":
+                    collapsed.discard(g.cwd)
+                elif kind == "more":
+                    expanded.add(g.cwd)
         elif ch in (curses.KEY_ENTER, 10, 13):
             if 0 <= cursor < len(rows):
                 kind, g, s = rows[cursor]
@@ -1353,6 +1489,11 @@ def main_curses(stdscr, target: str):
                         collapsed.discard(g.cwd)
                     else:
                         collapsed.add(g.cwd)
+                elif kind == "more":
+                    if g.cwd in expanded:
+                        expanded.discard(g.cwd)
+                    else:
+                        expanded.add(g.cwd)
                 else:
                     warning = present_session(s, groups, target, reap_state)
                     if warning:
@@ -1374,8 +1515,10 @@ def main():
     args = ap.parse_args()
 
     if args.list:
-        for g in load_groups():
-            print(shorten_cwd(g.cwd))
+        groups = load_groups()
+        labels = canonical_group_names(groups)
+        for g in groups:
+            print(labels.get(g.cwd, g.cwd))
             for s in g.sessions:
                 print(f"  {STATUS[s.status][0]} [{s.status:7}] "
                       f"{s.title[:60]:<60} {rel_time(s.last_ts):>4}  {s.id}")

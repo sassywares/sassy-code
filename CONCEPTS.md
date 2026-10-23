@@ -87,3 +87,13 @@ and from live processes, rather than from a state Pi pushes.
 
 **Collapse** — hiding a project group's sessions while keeping its heading
 visible; the inverse is **expand**. *Avoid: fold/unfold, close/open.*
+
+**Project name** — the readable label for a group's working directory: `root`
+for home, otherwise the folder's own name (`tap2-workspace`), grown with parent
+folders only when two projects share a name (`a/app`, `b/app`). The full cwd
+still keys grouping and collapse state. *Avoid: path, shortened path.*
+
+**Session limit** — the cap on sessions drawn under one project
+(`SESSION_LIMIT`, currently 5) before a `… N more` row. Expanding reveals the
+rest and relabels the row `… show fewer`; a **running** session is never hidden
+behind the limit. *Avoid: pagination, truncation.*

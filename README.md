@@ -9,7 +9,11 @@ tmux panes.
 ![sassy-pi: the session control panel on the left and the resumed session on the right](assets/sassy-pi.png)
 
 Session titles are truncated to a single line with an ellipsis; the age is
-right-aligned.
+right-aligned. Projects are grouped by working directory and labelled with the
+folder's own name — `root` for home, `tap2-workspace` instead of the whole path
+— with a blank line between projects. A project shows its five most recent
+sessions, then `… N more`; that row toggles to `… show fewer` once expanded. A
+live (running) session is never hidden behind the limit.
 
 ## Table of contents
 
@@ -74,8 +78,10 @@ ln -s "$PWD/main" ~/.local/bin/sassy-pi
 ```
 
 Keys in the left pane: `↑/↓` or `j/k` move, `g/G` jump, `Enter` presents a
-session (and focuses the right pane) or collapses/expands a directory, `←/→`
-or `h/l` collapse/expand a directory, `n` new session in the selected project,
+session (and focuses the right pane), collapses/expands a directory, or toggles
+`… N more`/`… show fewer`, `←/→`
+or `h/l` collapse/expand a directory or a project's session limit, `n` new
+session in the selected project,
 `r` reload every managed session (sends `/reload` to each live Pi pane and
 refreshes the session list), `/` filter (which auto-expands groups), `q` quit.
 The highlight is attached to the session, not the row, so it follows a session

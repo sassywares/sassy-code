@@ -24,12 +24,14 @@ the same index points at a different row afterwards.
 
 Store the highlighted row's identity instead of its index:
 
-- `row_key(item)` returns `("session", id, cwd)` or `("group", cwd)`.
+- `row_key(item)` returns `("session", id, cwd)`, `("more", cwd)` or
+  `("group", cwd)`.
 - At the top of every loop iteration, `cursor_for_key(rows, selected)` converts
   that key back into an index against the freshly sorted rows.
 - After a key event changes the cursor, the new `row_key(rows[cursor])` is
   stored in `selected`.
-- `cursor_for_key` falls back to the containing group header when the session is
+- `cursor_for_key` falls back to the project's `more` row when the session was
+  pushed behind the per-project limit, then to the group header when it is
   hidden by a collapse or filter, and to row 0 when it no longer exists.
 
 Reloads can therefore reorder the list freely; the highlight follows the logical
