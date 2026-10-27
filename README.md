@@ -7,7 +7,7 @@ live agent session on the right. Switching keeps in-flight work alive in
 background tmux panes. Sessions from both harnesses share one list, grouped by
 working directory and marked with a small glyph: `π` for Pi, `✳` for Claude Code.
 
-![sassy-code: the session control panel on the left and the resumed session on the right](assets/sassy-code.png)
+<img width="1536" height="988" alt="image" src="https://github.com/user-attachments/assets/5d8ef5c1-28f2-48ec-a2c8-950c501a8864" />
 
 Session titles are truncated to a single line with an ellipsis; the age is
 right-aligned. Projects are grouped by working directory and labelled with the
