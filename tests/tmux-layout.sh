@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LABEL="sassy-pi-layout-test-$$"
+LABEL="sassy-code-layout-test-$$"
 TMP=""
 COLD_DIR=""
 
@@ -27,7 +27,7 @@ fail() {
 }
 
 TMP="$(mktemp -d)"
-mkdir -p "$TMP/sessions"
+mkdir -p "$TMP/sessions" "$TMP/claude"
 
 env -u TMUX tmux -L "$LABEL" -f /dev/null \
   new-session -d -s user -n win -x 160 -y 40
@@ -36,6 +36,7 @@ SOCKET="$(tmux -L "$LABEL" display -p '#{socket_path}')"
 
 env TMUX="$SOCKET" TMUX_PANE="$VIEWER" \
   PI_CODING_AGENT_SESSION_DIR="$TMP/sessions" \
+  SASSY_CODE_CLAUDE_SESSION_DIR="$TMP/claude" \
   TERM="${TERM:-xterm-256color}" \
   "$ROOT/main"
 
@@ -76,7 +77,7 @@ printf 'PASS: in-tmux panel is narrow, leftmost, and beside the viewer\n'
 # Scenario 2: cold start with no server. `tmux attach` cannot run without a
 # terminal, but the launcher creates the layout first; inspect that layout.
 COLD_DIR="$(mktemp -d)"
-mkdir -p "$COLD_DIR/sessions" "$COLD_DIR/home" "$COLD_DIR/config"
+mkdir -p "$COLD_DIR/sessions" "$COLD_DIR/claude" "$COLD_DIR/home" "$COLD_DIR/config"
 cold_tmux() {
   env -u TMUX TMUX_TMPDIR="$COLD_DIR/tmux" tmux "$@"
 }
@@ -84,13 +85,14 @@ cold_tmux() {
 env -u TMUX TMUX_TMPDIR="$COLD_DIR/tmux" \
   HOME="$COLD_DIR/home" XDG_CONFIG_HOME="$COLD_DIR/config" \
   PI_CODING_AGENT_SESSION_DIR="$COLD_DIR/sessions" \
+  SASSY_CODE_CLAUDE_SESSION_DIR="$COLD_DIR/claude" \
   TERM="${TERM:-xterm-256color}" \
   "$ROOT/main" </dev/null >/dev/null 2>&1 || true
 
 cold_left=""
 cold_right=""
 for _ in $(seq 1 50); do
-  panes="$(cold_tmux list-panes -t sassy-pi \
+  panes="$(cold_tmux list-panes -t sassy-code \
     -F '#{pane_id} #{pane_width} left=#{pane_left} cmd=#{pane_current_command}' \
     2>/dev/null || true)"
   count="$(printf '%s\n' "$panes" | grep -c . || true)"

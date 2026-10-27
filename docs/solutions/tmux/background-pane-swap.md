@@ -29,7 +29,7 @@ wrong after the first swap.
 
 ## Solution
 
-Use a dedicated background session, `sassy-pi-bg`, with one hidden single-pane
+Use a dedicated background session, `sassy-code-bg`, with one hidden single-pane
 window per live session. Give every managed pane an authoritative pane option:
 
 ```bash

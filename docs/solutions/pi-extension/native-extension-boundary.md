@@ -1,5 +1,5 @@
 ---
-title: sassy-pi's two-pane layout cannot be a pure extension; `switchSession` is the native path
+title: sassy-code's two-pane layout cannot be a pure extension; `switchSession` is the native path
 category: pi-extension
 tags: [pi-extension, tmux, session-manager, architecture]
 created: 2026-10-17
@@ -8,7 +8,7 @@ updated: 2026-10-17
 
 ## Context
 
-`sassy-pi` is an external Python program that lists Pi sessions in one tmux pane
+`sassy-code` is an external Python program that lists Pi sessions in one tmux pane
 and presents one at a time in an adjacent pane, keeping switched-away sessions
 alive in background panes. The question was whether the whole thing
 could be reimplemented as a Pi extension, removing the separate process and the

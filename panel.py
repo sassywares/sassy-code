@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Pi session control panel.
+"""Sassy Code session control panel.
 
-Left pane: grouped list of all Pi sessions with status.
+Left pane: grouped list of all Pi and Claude Code sessions with status.
 Right pane: the session currently selected, presented by swapping tmux panes.
 
 Sessions that are switched away from stay alive in a dedicated background tmux
-session (`sassy-pi-bg`), one hidden single-pane window per live session.  The
-panel never respawns a managed pane, so no in-flight Pi process is ever killed
-by switching.  This process runs in the left tmux pane and never blocks on the
-viewer.
+session (`sassy-code-bg`), one hidden single-pane window per live session.  The
+panel never respawns a managed pane, so no in-flight agent process is ever
+killed by switching.  This process runs in the left tmux pane and never blocks
+on the viewer.
 """
 from __future__ import annotations
 
@@ -18,25 +18,45 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
-SESSIONS_DIR = os.environ.get(
+PI_SESSIONS_DIR = os.environ.get(
     "PI_CODING_AGENT_SESSION_DIR", os.path.expanduser("~/.pi/agent/sessions")
 )
-STATE_FILE = os.path.expanduser("~/.pi/agent/.sassy-pi-current")
+CLAUDE_SESSIONS_DIR = os.environ.get(
+    "SASSY_CODE_CLAUDE_SESSION_DIR",
+    os.path.join(
+        os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")),
+        "projects",
+    ),
+)
+STATE_FILE = os.path.expanduser("~/.sassy-code-current")
 ACTIVE_WINDOW = 300  # seconds -> "active"
 SESSION_LIMIT = 5  # sessions shown per project before "… N more"
 
-BG_SESSION = "sassy-pi-bg"
+BG_SESSION = "sassy-code-bg"
+DEFAULT_HARNESS = "pi"
+# Small, quiet marks that say which harness owns a session.
+HARNESS = {
+    "pi": {"label": "Pi", "glyph": "π"},
+    "claude": {"label": "Claude Code", "glyph": "✳"},
+}
+HARNESS_KEYS = tuple(HARNESS)
 PANE_OPTION = "@sassy_session"
 PANEL_OPTION = "@sassy_panel"
 REAP_GRACE = 2.0
-TERMINAL_STOP_REASONS = {"stop", "error", "aborted"}
+TERMINAL_STOP_REASONS = {
+    # Pi
+    "stop", "error", "aborted",
+    # Claude Code (Anthropic stop reasons)
+    "end_turn", "stop_sequence", "max_tokens", "refusal",
+}
 
 # status -> (symbol, color pair index)
 STATUS = {
@@ -46,8 +66,14 @@ STATUS = {
     "idle": ("·", 4),
 }
 
-PI_COMMAND_RE = re.compile(r"(?:^|[\s/])pi(?:\s|$)")
-SESSION_ARG_RE = re.compile(r"--session(?:-id)?(?:=|\s+)(\S+)")
+PI_SESSION_ARG_RE = re.compile(r"--session(?:-id)?(?:=|\s+)(\S+)")
+CLAUDE_SESSION_ARG_RE = re.compile(
+    r"(?:--resume|--session-id|-r)(?:=|\s+)(\S+)"
+)
+CLAUDE_SESSION_FILE_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.jsonl$"
+)
 SHELL_PROCESS_NAMES = {"sh", "bash", "zsh", "dash", "ksh", "fish"}
 
 
@@ -62,10 +88,12 @@ class Session:
     preview: str = ""
     last_user: str = ""
     parent_path: str = ""
+    harness: str = "pi"
     status: str = "idle"
     messages: int = 0
     last_role: str | None = None
     last_stop_reason: str | None = None
+    last_error: bool = False
 
     @property
     def title(self) -> str:
@@ -137,31 +165,40 @@ def text_of(content) -> str:
 
 
 def clean_preview(txt: str) -> str:
-    """Turn a user turn into a one-line preview, skipping skill injections."""
+    """Turn a user turn into a one-line preview, skipping injected context."""
     txt = re.sub(r"\s+", " ", txt).strip()
     if txt.startswith("<skill"):
         # Prefer text the user typed after the injected skill body, if any.
         tail = re.sub(r"^.*?</skill>", "", txt, flags=re.S).strip()
         return tail or "(skill invocation)"
-    return txt
+    if txt.startswith("<local-command-"):
+        return ""
+    # Claude Code records slash commands as tagged prompt text.
+    txt = re.sub(r"</?command-(?:name|args|message)>?", " ", txt)
+    return re.sub(r"\s+", " ", txt).strip()
 
 
-def parse_session(path: str) -> Session | None:
+def _load(line: str):
+    try:
+        return json.loads(line)
+    except Exception:
+        return None
+
+
+def _read_lines(path: str) -> list[str] | None:
     try:
         with open(path, "r", errors="replace") as f:
-            lines = f.readlines()
+            return f.readlines()
     except OSError:
         return None
+
+
+def parse_pi_session(path: str) -> Session | None:
+    lines = _read_lines(path)
     if not lines:
         return None
 
-    def load(line: str):
-        try:
-            return json.loads(line)
-        except Exception:
-            return None
-
-    header = load(lines[0])
+    header = _load(lines[0])
     if not header or header.get("type") != "session":
         return None
 
@@ -172,12 +209,13 @@ def parse_session(path: str) -> Session | None:
         created=iso_to_epoch(header.get("timestamp", "")),
         last_ts=iso_to_epoch(header.get("timestamp", "")),
         parent_path=header.get("parentSession", "") or "",
+        harness="pi",
     )
 
     last_role = None
     last_is_error = False
     for line in lines[1:]:
-        o = load(line)
+        o = _load(line)
         if not o:
             continue
         s.last_ts = max(s.last_ts, iso_to_epoch(o.get("timestamp", "")))
@@ -206,15 +244,181 @@ def parse_session(path: str) -> Session | None:
                 if m.get("isError"):
                     last_is_error = True
 
-    status = "idle"
-    if last_is_error:
-        status = "error"
-    elif last_role == "user":
-        status = "active"  # user spoke last -> awaiting/handling
-    elif time.time() - s.last_ts < ACTIVE_WINDOW:
-        status = "active"
-    s.status = status
+    s.last_error = last_is_error
+    s.status = _infer_status(s)
     return s
+
+
+def _claude_content_types(content) -> set[str]:
+    if not isinstance(content, list):
+        return set()
+    return {
+        b.get("type", "")
+        for b in content
+        if isinstance(b, dict)
+    }
+
+
+def _claude_is_human_prompt(entry: dict, content) -> bool:
+    """True when a top-level `user` entry is a turn, not tool output/meta.
+
+    Claude Code marks injected context with `isMeta` and echoes slash commands
+    as `<command-...>` / `<local-command-...>` text. Anything else that is not
+    a `tool_result` is treated as a user turn, which errs on the side of
+    "still working" so a live pane is never reaped from a misread.
+    """
+    if entry.get("isMeta"):
+        return False
+    text = text_of(content).strip()
+    if not text:
+        return bool(content) and not isinstance(content, str)
+    return not text.startswith(("<local-command-", "<command-"))
+
+
+def _claude_cwd_from_dir(path: str) -> str:
+    """Best-effort cwd from an encoded project directory name.
+
+    Claude Code encodes a cwd by replacing separators and punctuation with
+    `-`, which is lossy. Real session files carry `cwd` on nearly every entry;
+    this is only the fallback for a file that does not.
+    """
+    name = os.path.basename(os.path.dirname(path))
+    if not name.startswith("-"):
+        return ""
+    return "/" + name.strip("-").replace("-", "/")
+
+
+def parse_claude_session(path: str) -> Session | None:
+    """Parse a Claude Code transcript (`~/.claude/projects/<cwd>/<uuid>.jsonl`).
+
+    Claude Code has no header line: the first entry that carries `sessionId`,
+    `cwd`, or `timestamp` supplies the identity. Subagent sidechains live in
+    the same file, so they are skipped for preview and status inference; only
+    the main thread decides what the session is doing.
+    """
+    lines = _read_lines(path)
+    if not lines:
+        return None
+
+    file_id = os.path.basename(path)[: -len(".jsonl")]
+    s = Session(
+        path=path,
+        id=file_id if CLAUDE_SESSION_FILE_RE.match(os.path.basename(path)) else "",
+        cwd="",
+        created=0.0,
+        last_ts=0.0,
+        harness="claude",
+    )
+
+    last_role = None
+    last_is_error = False
+    for line in lines:
+        o = _load(line)
+        if not o:
+            continue
+        ts = iso_to_epoch(o.get("timestamp", ""))
+        if ts:
+            s.last_ts = max(s.last_ts, ts)
+            if not s.created:
+                s.created = ts
+        if o.get("isSidechain"):
+            continue
+        # Identity comes from the main thread only: a subagent entry may carry
+        # a different session id and must not rename the parent session.
+        if o.get("sessionId"):
+            s.id = str(o["sessionId"])
+        if o.get("cwd"):
+            s.cwd = str(o["cwd"])
+
+        t = o.get("type")
+        if t == "summary":
+            s.name = o.get("summary", "") or s.name
+        elif t == "user":
+            m = o.get("message", {})
+            content = m.get("content")
+            if "tool_result" in _claude_content_types(content):
+                s.messages += 1
+                last_role, last_is_error = "toolResult", False
+                s.last_role, s.last_stop_reason = last_role, None
+            elif _claude_is_human_prompt(o, content):
+                txt = text_of(content).strip()
+                s.messages += 1
+                last_role, last_is_error = "user", False
+                s.last_role, s.last_stop_reason = last_role, None
+                if txt:
+                    s.last_user = txt
+                    if not s.preview:
+                        s.preview = clean_preview(txt)
+        elif t == "assistant":
+            m = o.get("message", {})
+            s.messages += 1
+            last_role = "assistant"
+            s.last_role = last_role
+            stop = m.get("stop_reason")
+            if o.get("isApiErrorMessage") or o.get("error"):
+                last_is_error = True
+                s.last_stop_reason = "error"
+            else:
+                last_is_error = False
+                s.last_stop_reason = stop
+
+    if not s.id:
+        # A transcript without `sessionId` is not an addressable session.
+        return None
+    if not s.cwd:
+        s.cwd = _claude_cwd_from_dir(path)
+    if not s.created:
+        s.created = s.last_ts
+    s.last_error = last_is_error
+    s.status = _infer_status(s)
+    return s
+
+
+def parse_session(path: str, harness: str = "pi") -> Session | None:
+    if harness == "claude":
+        return parse_claude_session(path)
+    return parse_pi_session(path)
+
+
+def _infer_status(s: Session) -> str:
+    if s.last_error:
+        return "error"
+    if s.last_role in ("user", "toolResult"):
+        return "active"  # user or tool spoke last -> awaiting/handling
+    if s.last_stop_reason == "tool_use":
+        return "active"  # Claude is mid-tool-use
+    if time.time() - s.last_ts < ACTIVE_WINDOW:
+        return "active"
+    return "idle"
+
+
+_PARSE_CACHE: dict[tuple[str, str], tuple[int, int, Session]] = {}
+
+
+def read_session(path: str, harness: str = "pi") -> Session | None:
+    """Parse a transcript, reusing the last result while the file is unchanged.
+
+    Claude Code transcripts are frequently megabytes long, and the panel
+    refreshes every couple of seconds, so unchanged files must not be re-read.
+    Callers get a copy: status is recomputed per refresh.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (path, harness)
+    cached = _PARSE_CACHE.get(key)
+    if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+        s = replace(cached[2])
+        # The active window is clock-relative, so an unchanged file can still
+        # age from active to idle between refreshes.
+        s.status = _infer_status(s)
+        return s
+    s = parse_session(path, harness)
+    if s is None:
+        return None
+    _PARSE_CACHE[key] = (st.st_mtime_ns, st.st_size, s)
+    return replace(s)
 
 
 def process_table(timeout: float = 5) -> list[Proc]:
@@ -258,50 +462,100 @@ def descendants(root_pids: set[int], procs: list[Proc]) -> set[int]:
     return result
 
 
-def session_id_from_command(command: str) -> str | None:
-    m = SESSION_ARG_RE.search(command)
-    if not m:
-        return None
-    return m.group(1).strip("'\"").rstrip(";")
+def _tokens(command: str) -> list[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.split()
+
+
+def _is_shell_command_text(tokens: list[str], index: int) -> bool:
+    """True when tokens[index] is inside a shell's `-c` command string."""
+    for shell_index in range(index):
+        if os.path.basename(tokens[shell_index]) not in SHELL_PROCESS_NAMES:
+            continue
+        for option in tokens[shell_index + 1:index]:
+            if option.startswith("-") and "c" in option[1:]:
+                return True
+            if not option.startswith("-"):
+                break
+    return False
+
+
+def _runs_program(command: str, names: set[str]) -> bool:
+    """True when the command actually executes one of *names*.
+
+    tmux starts a pane command through a shell, so the pane's root process
+    command can contain `pi --session ...` or `claude --resume ...` even though
+    the live agent is a child. Shell `-c` text is not the executable.
+    """
+    tokens = _tokens(command)
+    for index, token in enumerate(tokens):
+        if os.path.basename(token) not in names:
+            continue
+        if not _is_shell_command_text(tokens, index):
+            return True
+    return False
 
 
 def command_is_pi(command: str) -> bool:
-    """True when the command is an actual Pi process, not a shell wrapper.
+    return _runs_program(command, {"pi"})
 
-    tmux starts a pane command through a shell, so the pane's root process
-    command can contain `pi --session ...` even though the live Pi is a child.
-    """
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = command.split()
-    if not tokens:
-        return False
+
+def command_is_claude(command: str) -> bool:
+    # Native installs run `claude`; npm installs run
+    # `node .../@anthropic-ai/claude-code/cli.js`. A script or grep that merely
+    # mentions that path is not the agent, so the hint only counts when the
+    # executable is a JavaScript runtime.
+    if _runs_program(command, {"claude"}):
+        return True
+    tokens = _tokens(command)
     for index, token in enumerate(tokens):
-        if os.path.basename(token) != "pi":
+        if os.path.basename(token) not in {"node", "bun", "deno"}:
             continue
-        for shell_index in range(index):
-            if os.path.basename(tokens[shell_index]) not in SHELL_PROCESS_NAMES:
-                continue
-            option = tokens[shell_index + 1]
-            if option.startswith("-") and "c" in option[1:]:
-                # The `pi ...` here is shell command text, not the executable.
-                break
-        else:
+        if _is_shell_command_text(tokens, index):
+            continue
+        if any(
+            "claude-code" in arg or "@anthropic-ai/claude" in arg
+            for arg in tokens[index + 1:]
+        ):
             return True
     return False
+
+
+def command_harness(command: str) -> str | None:
+    """Which supported harness a process command belongs to, if any."""
+    if command_is_pi(command):
+        return "pi"
+    if command_is_claude(command):
+        return "claude"
+    return None
+
+
+def session_id_from_command(
+    command: str, harness: str | None = None
+) -> str | None:
+    harness = harness or command_harness(command) or "pi"
+    pattern = (
+        CLAUDE_SESSION_ARG_RE if harness == "claude" else PI_SESSION_ARG_RE
+    )
+    match = pattern.search(command)
+    if not match:
+        return None
+    return match.group(1).strip("'\"").rstrip(";")
 
 
 def running_session_processes(
     procs: list[Proc] | None = None,
 ) -> dict[str, set[int]]:
-    """Map `--session`/`--session-id` process arguments to their PIDs."""
+    """Map a resumed session argument to the PIDs running it."""
     procs = process_table() if procs is None else procs
     found: dict[str, set[int]] = {}
     for p in procs:
-        if "--session" not in p.command:
+        harness = command_harness(p.command)
+        if not harness:
             continue
-        sid = session_id_from_command(p.command)
+        sid = session_id_from_command(p.command, harness)
         if sid:
             found.setdefault(sid, set()).add(p.pid)
     return found
@@ -443,7 +697,7 @@ def request_new_session(pane_id: str) -> bool:
     """
     panel_id = panel_pane_for(pane_id)
     if not panel_id:
-        tmux("display-message", "sassy-pi: no control panel in this window")
+        tmux("display-message", "sassy-code: no control panel in this window")
         return False
     return tmux_ok(tmux("send-keys", "-t", panel_id, "-l", "n"))
 
@@ -511,6 +765,7 @@ def _bg_window_name(tag: str = "") -> str:
 
 def _spawn_bg_window(cwd: str, command: str, tag: str = "") -> str:
     """Create one hidden single-pane window in the background session."""
+    cwd = cwd or os.path.expanduser("~")
     name = _bg_window_name(tag)
     if tmux_ok(tmux("has-session", "-t", f"={BG_SESSION}")):
         target = ["new-window", "-t", f"={BG_SESSION}:"]
@@ -529,16 +784,42 @@ def _spawn_bg_window(cwd: str, command: str, tag: str = "") -> str:
     return pane_id
 
 
+def default_harness() -> str:
+    """Harness for a brand-new session when the project has no hint.
+
+    `SASSY_CODE_NEW_HARNESS` wins when valid; otherwise use whichever harness
+    is installed, so a Claude-only machine does not try to run `pi`.
+    """
+    value = os.environ.get("SASSY_CODE_NEW_HARNESS", "").strip().lower()
+    if value in HARNESS:
+        return value
+    for candidate in HARNESS_KEYS:
+        if shutil.which(candidate):
+            return candidate
+    return DEFAULT_HARNESS
+
+
+def session_invoke(s: Session) -> str:
+    """The command that resumes *s* in a fresh pane."""
+    if s.harness == "claude":
+        return f"claude --resume {shlex.quote(s.id)}"
+    return f"pi --session {shlex.quote(s.id)}"
+
+
 def spawn_session_pane(s: Session) -> str:
-    invoke = f"pi --session {shlex.quote(s.id)}"
-    return _spawn_bg_window(s.cwd, _pane_command(invoke), tag=s.id)
+    return _spawn_bg_window(s.cwd, _pane_command(session_invoke(s)), tag=s.id)
 
 
-def spawn_new_session_pane(cwd: str, session_id: str | None = None) -> str:
-    # Pi can create a session under a caller-chosen id, so the new pane is
-    # tagged and adoptable immediately instead of waiting for a file to appear.
+def spawn_new_session_pane(
+    cwd: str, session_id: str | None = None, harness: str = DEFAULT_HARNESS
+) -> str:
+    # Both harnesses can create a session under a caller-chosen id, so the new
+    # pane is tagged and adoptable immediately instead of waiting for a file.
     session_id = session_id or str(uuid.uuid4())
-    invoke = f"pi --session-id {shlex.quote(session_id)}"
+    if harness == "claude":
+        invoke = f"claude --session-id {shlex.quote(session_id)}"
+    else:
+        invoke = f"pi --session-id {shlex.quote(session_id)}"
     return _spawn_bg_window(cwd, _pane_command(invoke), tag=session_id)
 
 
@@ -619,6 +900,13 @@ def pane_processes(pane: PaneInfo, procs: list[Proc]) -> list[Proc]:
             if pid in by_pid]
 
 
+def pane_has_agent(pane: PaneInfo, procs: list[Proc]) -> bool:
+    """True when a supported harness is alive anywhere in the pane."""
+    return any(
+        command_harness(p.command) for p in pane_processes(pane, procs)
+    )
+
+
 def pane_has_pi(pane: PaneInfo, procs: list[Proc]) -> bool:
     return any(command_is_pi(p.command) for p in pane_processes(pane, procs))
 
@@ -626,13 +914,16 @@ def pane_has_pi(pane: PaneInfo, procs: list[Proc]) -> bool:
 def pane_running_session(
     pane: PaneInfo, procs: list[Proc]
 ) -> str | None:
-    # Prefer an actual Pi process over the pane shell's command text.
+    # Prefer an actual agent process over the pane shell's command text.
     processes = sorted(
         pane_processes(pane, procs),
-        key=lambda p: (not command_is_pi(p.command), p.pid),
+        key=lambda p: (not command_harness(p.command), p.pid),
     )
     for p in processes:
-        sid = session_id_from_command(p.command)
+        harness = command_harness(p.command)
+        if not harness:
+            continue
+        sid = session_id_from_command(p.command, harness)
         if sid:
             return sid
     return None
@@ -695,7 +986,7 @@ def external_session_running(
     procs: list[Proc],
     running: dict[str, set[int]] | None = None,
 ) -> bool:
-    """A session is external if its Pi process lives outside managed panes."""
+    """A session is external if its agent process lives outside managed panes."""
     running = running_session_processes(procs) if running is None else running
     managed = managed_process_pids(panes, procs)
     for sid, pids in running.items():
@@ -778,7 +1069,7 @@ def reap_hidden(
     procs: list[Proc],
     reap_state: dict[str, float],
 ) -> None:
-    """Remove hidden panes with no Pi left, or finished with their turn."""
+    """Remove hidden panes with no agent left, or finished with their turn."""
     sessions = session_index(groups)
     now = time.time()
     hidden_ids = set()
@@ -787,8 +1078,8 @@ def reap_hidden(
             continue
         hidden_ids.add(pane.id)
         s = find_session(sessions, pane.tag)
-        if not pane_has_pi(pane, procs):
-            # The Pi already exited: remove the leftover shell/window too.
+        if not pane_has_agent(pane, procs):
+            # The agent already exited: remove the leftover shell/window too.
             kill_pane(pane.id)
             reap_state.pop(pane.id, None)
             continue
@@ -878,7 +1169,7 @@ def present_session(
 
     if target_id:
         target_pane = panes_by_id[target_id]
-        if not pane_has_pi(target_pane, procs):
+        if not pane_has_agent(target_pane, procs):
             # The tagged pane is only a leftover shell. Replace it rather than
             # presenting a dead pane (hidden ones are normally reaped first).
             if target_id != viewer:
@@ -894,7 +1185,7 @@ def present_session(
     if not target_id and external_session_running(
         s.id, panes, procs, running_session_processes(procs)
     ):
-        return f"{s.title[:36]} is already running outside sassy-pi"
+        return f"{s.title[:36]} is already running outside sassy-code"
 
     if target_id:
         warning = _present_pane(target_id, viewer, reap_state)
@@ -917,17 +1208,19 @@ def new_session(
     cwd: str,
     groups: list[Group] | None = None,
     reap_state: dict[str, float] | None = None,
+    harness: str | None = None,
 ) -> str | None:
-    """Start a fresh Pi in the viewer via the background swap path."""
+    """Start a fresh agent in the viewer via the background swap path."""
     groups = load_groups() if groups is None else groups
     reap_state = {} if reap_state is None else reap_state
+    harness = harness if harness in HARNESS else default_harness()
     panel_id, panes, viewer = visible_layout(preferred=target)
     if not panel_id or not panes:
         return "No tmux layout found for the control panel"
     if not viewer:
         return "No session viewer pane found"
     session_id = str(uuid.uuid4())
-    new_pane = spawn_new_session_pane(cwd, session_id)
+    new_pane = spawn_new_session_pane(cwd, session_id, harness)
     if not new_pane:
         return "Could not start a new session"
     warning = _present_pane(new_pane, viewer, reap_state)
@@ -946,8 +1239,8 @@ def preserve_active_on_quit(
     """Move a live viewer session into the background before quitting.
 
     The panel's cached groups can be seconds old, so the decision is made from
-    a fresh process table and session store. A live Pi is authoritative: it is
-    preserved even if the last recorded assistant message looks complete.
+    a fresh process table and session store. A live agent is authoritative: it
+    is preserved even if the last recorded assistant message looks complete.
     """
     # Ignore the caller's cached groups; they may predate the current turn.
     groups = load_groups()
@@ -960,9 +1253,9 @@ def preserve_active_on_quit(
     if not pane:
         return
 
-    # Completed sessions with no live Pi do not need preserving. Conversely, a
-    # live Pi must survive even when the JSONL still shows a terminal stop.
-    if not pane_has_pi(pane, procs):
+    # Completed sessions with no live agent do not need preserving. Conversely,
+    # a live agent must survive even when the JSONL still shows a terminal stop.
+    if not pane_has_agent(pane, procs):
         return
 
     sessions = session_index(groups)
@@ -982,6 +1275,40 @@ def preserve_active_on_quit(
     focus(placeholder)
 
 
+def _store_files(directory: str, harness: str) -> list[tuple[str, str]]:
+    """Transcript files in one harness store, paired with their harness."""
+    try:
+        project_dirs = os.listdir(directory)
+    except OSError:
+        return []
+    files = []
+    for name in project_dirs:
+        dpath = os.path.join(directory, name)
+        if not os.path.isdir(dpath):
+            continue
+        try:
+            names = os.listdir(dpath)
+        except OSError:
+            continue
+        for filename in names:
+            if not filename.endswith(".jsonl"):
+                continue
+            if harness == "claude" and not CLAUDE_SESSION_FILE_RE.match(
+                filename
+            ):
+                # Claude keeps subagent transcripts beside sessions; only a
+                # UUID-named file is a resumable session.
+                continue
+            files.append((os.path.join(dpath, filename), harness))
+    return files
+
+
+def session_files() -> list[tuple[str, str]]:
+    return _store_files(PI_SESSIONS_DIR, "pi") + _store_files(
+        CLAUDE_SESSIONS_DIR, "claude"
+    )
+
+
 def load_groups() -> list[Group]:
     procs = process_table()
     panes = managed_panes()
@@ -989,21 +1316,12 @@ def load_groups() -> list[Group]:
     tagged = {p.tag for p in panes if p.tag}
     groups: dict[str, Group] = {}
     sessions: dict[str, Session] = {}
-    try:
-        dirs = [d for d in os.listdir(SESSIONS_DIR)
-                if os.path.isdir(os.path.join(SESSIONS_DIR, d))]
-    except OSError:
-        return []
-    for d in dirs:
-        dpath = os.path.join(SESSIONS_DIR, d)
-        for fn in os.listdir(dpath):
-            if not fn.endswith(".jsonl"):
-                continue
-            s = parse_session(os.path.join(dpath, fn))
-            if not s:
-                continue
-            sessions.setdefault(s.id, s)
-            groups.setdefault(s.cwd, Group(s.cwd)).sessions.append(s)
+    for path, harness in session_files():
+        s = read_session(path, harness)
+        if not s:
+            continue
+        sessions.setdefault(s.id, s)
+        groups.setdefault(s.cwd, Group(s.cwd)).sessions.append(s)
 
     # A managed pane's tag is the authority on the session it runs; adoption
     # keeps it current. Resolve each pane the same way adoption does, so a tag
@@ -1014,8 +1332,8 @@ def load_groups() -> list[Group]:
         target = pane_switch_target(pane, sessions, children, tagged, procs)
         if target is not None:
             live.add(target.id)
-    # Command lines only identify sessions whose Pi runs outside managed panes,
-    # so a pane's stale argv cannot double-count as a still-running session.
+    # Command lines only identify sessions whose agent runs outside managed
+    # panes, so a pane's stale argv cannot double-count as still running.
     managed = managed_process_pids(panes, procs)
     external = {
         sid: {pid for pid in pids if pid not in managed}
@@ -1135,6 +1453,8 @@ def rows_for(
             or flt_l in s.title.lower()
             or flt_l in s.id.lower()
             or flt_l in s.last_user.lower()
+            or flt_l in s.harness
+            or flt_l in HARNESS[s.harness]["label"].lower()
         ]
         gm = not flt or flt_l in g.cwd.lower()
         if not match_sessions and not gm:
@@ -1324,7 +1644,8 @@ def build_lines(
         else:
             sym, _ = STATUS[s.status]
             suffix = rel_time(s.last_ts)
-            prefix = f" {sym} "
+            glyph = HARNESS[s.harness]["glyph"]
+            prefix = f" {sym} {glyph} "
             tw = max(4, w - len(prefix) - len(suffix) - 2)
             title = s.title
             if len(title) > tw:
@@ -1341,7 +1662,7 @@ def draw(
 ):
     stdscr.erase()
     h, w = stdscr.getmaxyx()
-    title = f" Pi sessions — {sum(len(g.sessions) for g in groups)} sessions "
+    title = f" Sassy Code — {sum(len(g.sessions) for g in groups)} sessions "
     stdscr.addnstr(0, 0, title.ljust(w - 1), w - 1, curses.A_REVERSE | curses.A_BOLD)
     if flt:
         stdscr.addnstr(1, 0, f" filter: {flt}", w - 1, curses.A_DIM)
@@ -1507,8 +1828,16 @@ def main_curses(stdscr, target: str):
             continue
         elif ch == ord("n"):
             if 0 <= cursor < len(rows):
+                kind, g, selected_session = rows[cursor]
+                # New sessions continue the habit of the project: reuse the
+                # harness of the highlighted session (or its newest sibling).
+                harness = (
+                    selected_session.harness
+                    if kind == "session" and selected_session
+                    else (g.sessions[0].harness if g.sessions else None)
+                )
                 warning = new_session(
-                    target, rows[cursor][1].cwd, groups, reap_state
+                    target, g.cwd, groups, reap_state, harness
                 )
                 if warning:
                     message = f" {warning} "
@@ -1585,6 +1914,7 @@ def main():
             print(labels.get(g.cwd, g.cwd))
             for s in g.sessions:
                 print(f"  {STATUS[s.status][0]} [{s.status:7}] "
+                      f"[{s.harness:6}] "
                       f"{s.title[:60]:<60} {rel_time(s.last_ts):>4}  {s.id}")
         return
 

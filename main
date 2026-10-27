@@ -4,8 +4,8 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PANEL_CMD="$(printf 'python3 %q' "$DIR/panel.py")"
-SESSION="sassy-pi"
-WIDTH="${SASSY_PI_WIDTH:-22%}"
+SESSION="sassy-code"
+WIDTH="${SASSY_CODE_WIDTH:-22%}"
 
 ensure_extended_keys() {
   # Recommended by `docs/tmux.md` so modified Enter works inside Pi.
@@ -32,13 +32,13 @@ ensure_new_session_key() {
   # A key in the prefix table that runs the panel's `n` binding from anywhere
   # in the window, so no focus change is needed. Never take a key that is
   # already bound: tmux defaults and the user's bindings win.
-  local key="${SASSY_PI_NEW_KEY:-N}" current
+  local key="${SASSY_CODE_NEW_KEY:-N}" current
   current="$(tmux list-keys -T prefix -F '#{key_command}' "$key" 2>/dev/null || true)"
   if [ -n "$current" ]; then
     case "$current" in
       *--new-session*) ;;   # ours already; refresh the path below
       *)
-        printf 'sassy-pi: prefix+%s is already bound; not overriding it\n' \
+        printf 'sassy-code: prefix+%s is already bound; not overriding it\n' \
           "$key" >&2
         return 0
         ;;
@@ -54,13 +54,13 @@ ensure_tmux_config() {
   ensure_new_session_key
 }
 
-if [ "${SASSY_PI_TMUX_CONFIG_ONLY:-}" = "1" ]; then
+if [ "${SASSY_CODE_TMUX_CONFIG_ONLY:-}" = "1" ]; then
   # `start-server` exits immediately without sessions unless exit-empty is
   # disabled in the same command sequence. Doing so keeps the cold-started
   # server alive long enough to apply and inspect the configuration.
   if ! tmux list-sessions >/dev/null 2>&1; then
     if ! err="$(tmux start-server \; set-option -g exit-empty off 2>&1)"; then
-      printf 'sassy-pi: failed to start a tmux server: %s\n' \
+      printf 'sassy-code: failed to start a tmux server: %s\n' \
         "${err:-tmux start-server failed}" >&2
       exit 1
     fi
@@ -83,7 +83,7 @@ if [ -n "${TMUX:-}" ]; then
   tmux select-pane -t "$PANEL_PANE"
 else
   if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-    tmux new-session -d -s "$SESSION" -n sassy-pi
+    tmux new-session -d -s "$SESSION" -n sassy-code
     WIN="$(tmux list-windows -t "$SESSION" -F '#{window_id}' | head -1)"
     SESS="$(tmux list-panes -t "$WIN" -F '#{pane_id}' | head -1)"
     PANEL_PANE="$(tmux split-window -h -b -t "$WIN" -l "$WIDTH" -P -F '#{pane_id}')"

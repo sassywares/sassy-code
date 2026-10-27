@@ -9,7 +9,7 @@ updated: 2026-10-17
 ## Problem
 
 The control panel kept rendering at roughly three quarters of the window no
-matter how small `SASSY_PI_WIDTH` was set. Lowering the percentage from 38% to
+matter how small `SASSY_CODE_WIDTH` was set. Lowering the percentage from 38% to
 30% to 22% changed nothing visible, so it looked as if the width setting was
 broken.
 

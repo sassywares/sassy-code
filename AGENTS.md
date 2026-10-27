@@ -1,31 +1,32 @@
 # AGENTS.md
 
-Guide for agents and contributors working in `sassy-pi`.
+Guide for agents and contributors working in `sassy-code`.
 
 ## What this is
 
-A two-pane tmux control panel for Pi sessions: a narrow left **control panel**
-that lists every session grouped by project, and a wide right **session viewer**
-that presents whichever session is selected. Switching sessions swaps the old
-viewer process into a hidden background pane instead of killing it.
+A two-pane tmux control panel for agent sessions: a narrow left **control
+panel** that lists every Pi and Claude Code session grouped by project, and a
+wide right **session viewer** that presents whichever session is selected.
+Switching sessions swaps the old viewer process into a hidden background pane
+instead of killing it.
 
 ## Layout
 
 | Path | Role |
 |---|---|
 | `main` | Bash launcher. Builds the tmux layout, passes the viewer pane id to the panel. |
-| `panel.py` | The curses control panel. Reads the Pi session store, manages viewer/background panes, renders the list, dispatches actions. |
+| `panel.py` | The curses control panel. Reads both harness session stores, manages viewer/background panes, renders the list, dispatches actions. |
 | `tests/` | Isolated tmux tests (`tmux -L`, `-f /dev/null`) and key-binding regressions. |
 | `CONCEPTS.md` | Vocabulary used across the repo. Read before changing user-facing terms. |
 | `docs/solutions/` | Durable learnings. Read the relevant entry before re-investigating a problem. |
 
 ## How to run
 
-Requires `tmux`, `python3`, `pi`, and bash. See
+Requires `tmux`, `python3`, bash, and at least one of `pi` / `claude`. See
 [README § Requirements](README.md#requirements) for install links.
 
 ```bash
-./main                                      # or the `sassy-pi` shell alias
+./main                                      # or the `sassy-code` shell alias
 ./panel.py --list                            # plain-text dump, no TUI
 python3 -m unittest tests.test_background    # isolated tmux lifecycle tests
 bash tests/tmux-pane-keys.sh                 # isolated key-binding regression
@@ -36,33 +37,40 @@ The launcher self-locates via `BASH_SOURCE`, so it works from any path or symlin
 
 ## Architecture in one paragraph
 
-`panel.py` parses Pi's JSONL session files directly (the session store under
-`~/.pi/agent/sessions/`), groups them by working directory, infers a status and
-turn completion from each file's last message plus a process-table check, and
-renders the result with `curses`. Timestamps are UTC epochs; render them only at
-draw time. Managed panes are tagged with the tmux pane option
-`@sassy_session=<id>`. An in-process switch (`/handoff`, `/fork`, `/clone`)
-leaves that tag and the process command line on the old session, so the panel
-follows the successor's `parentSession` link, re-tags the pane, and moves the
-**running** marker to the successor. On Enter the panel adopts a tagged pane or starts
-`pi --session <id>` in a hidden single-pane window in the dedicated
-`sassy-pi-bg` tmux session, then uses `swap-pane -dZ` to put it in the viewer.
-The displaced viewer process is swapped into the background, keeping its
-scrollback, cwd, and in-flight turn. The viewer slot is re-derived from the
-panel's tmux window after every swap because pane ids travel with processes.
-There is no Pi API dependency and no server; the session files are the contract.
-The panel also tags its own pane with
-`@sassy_panel`; the launcher binds a free prefix key (default `N`) to
-`panel.py --new-session --pane #{pane_id}`, which finds that tag in the focused
-window and sends the panel its own `n` key. That starts a session in the
-highlighted project without moving focus, and never duplicates the spawn path.
+`panel.py` parses Pi's JSONL session files (`~/.pi/agent/sessions/`) and Claude
+Code's transcripts (`~/.claude/projects/`), groups them by working directory,
+infers a status and turn completion from each file's main-thread messages plus a
+process-table check, and renders the result with `curses`. Timestamps are UTC
+epochs; render them only at draw time. Every `Session` carries a `harness` key
+(`pi` or `claude`) that chooses the resume command and the row glyph. Managed
+panes are tagged with the tmux pane option `@sassy_session=<id>`. An in-process
+switch (`/handoff`, `/fork`, `/clone`) leaves that tag and the process command
+line on the old Pi session, so the panel follows the successor's
+`parentSession` link, re-tags the pane, and moves the **running** marker to the
+successor. On Enter the panel adopts a tagged pane or starts the session's own
+harness (`pi --session <id>` or `claude --resume <id>`) in a hidden single-pane
+window in the dedicated `sassy-code-bg` tmux session, then uses `swap-pane -dZ`
+to put it in the viewer. The displaced viewer process is swapped into the
+background, keeping its scrollback, cwd, and in-flight turn. The viewer slot is
+re-derived from the panel's tmux window after every swap because pane ids travel
+with processes. There is no harness API dependency and no server; the session
+files are the contract. Parsed files are cached by path, mtime, and size because
+Claude transcripts are large and the panel refreshes every two seconds.
+The panel also tags its own pane with `@sassy_panel`; the launcher binds a free
+prefix key (default `N`) to `panel.py --new-session --pane #{pane_id}`, which
+finds that tag in the focused window and sends the panel its own `n` key. That
+starts a session in the highlighted project without moving focus, and never
+duplicates the spawn path. The new session uses the harness of the highlighted
+session (or the project's newest session), falling back to
+`SASSY_CODE_NEW_HARNESS`, then to whichever harness is installed.
 
 Hidden panes are reaped only when their latest assistant message has a terminal
-stop reason (`stop`, `error`, `aborted`) for the full grace period, or when no
-descendant `pi` process is left. Switching away never force-reaps from a file
+stop reason (`stop`, `error`, `aborted` for Pi; `end_turn`, `stop_sequence`,
+`max_tokens`, `refusal` for Claude Code) for the full grace period, or when no
+descendant agent process is left. Switching away never force-reaps from a file
 read alone: the JSONL can lag the process. Visible panes are never auto-reaped.
-On quit a viewer with a live `pi` process is swapped into the background behind a
-placeholder shell so it survives the panel, even if its session file looks
+On quit a viewer with a live agent process is swapped into the background behind
+a placeholder shell so it survives the panel, even if its session file looks
 complete. Sessions already running outside managed panes are refused instead of
 duplicated.
 
@@ -71,6 +79,16 @@ duplicated.
 - **Stdlib only.** `panel.py` relies solely on the Python standard library.
 - **Single line per session.** Titles truncate with `…`; the age is right-aligned.
   Keep the panel narrow and scannable.
+- **Harness marks are quiet.** Every session row is `status glyph title age`
+  (`π` Pi, `✳` Claude Code). Do not add a second badge or column; the glyph is
+  the harness indicator. `HARNESS` is the single source for label and glyph.
+- **Harness behaviour is data, not branches.** Resume/new commands, session
+  stores, and terminal stop reasons live in the small `HARNESS` / store
+  helpers. Add a harness by adding an entry and a parser, not by scattering
+  `if harness == ...` through the panel.
+- **Pi-only actions stay Pi-only.** `r` (`/reload`) has no Claude Code
+  equivalent; it targets managed Pi panes only. In-process session switches are
+  a Pi concept; Claude transcripts have no session-level parent link.
 - **Dense projects.** `rows_for()` shows at most `SESSION_LIMIT` sessions per
   project plus a `more` row; never hide a `running` session. Group headings use
   `canonical_group_names()` (home is `root`, otherwise the folder name), and one
@@ -92,7 +110,7 @@ duplicated.
   or state handling in a binding, and never overwrite a key the user bound.
 - **Background work is lazy.** Only sessions opened through the panel get live
   panes. A working hidden pane survives; a completed hidden pane is reaped after
-  the refresh grace. Remove leftover shells with no descendant `pi`.
+  the refresh grace. Remove leftover shells with no descendant agent.
 
 ## Knowledge store
 
@@ -103,8 +121,9 @@ duplicated.
 
 ## Direction
 
-The panel logic can become a native Pi extension: `SessionManager.listAll()`
-lists sessions and `ctx.switchSession(path)` resumes one in place, at the cost of
-the side-by-side view. The two-pane layout fundamentally requires tmux, since a
-Pi extension lives inside one Pi process's TUI. See
+The Pi half of the panel logic can become a native Pi extension:
+`SessionManager.listAll()` lists sessions and `ctx.switchSession(path)` resumes
+one in place, at the cost of the side-by-side view. The two-pane layout
+fundamentally requires tmux, since a Pi extension lives inside one Pi process's
+TUI, and a combined Pi + Claude Code list has no single native home at all. See
 [`docs/solutions/pi-extension/`](docs/solutions/pi-extension/).

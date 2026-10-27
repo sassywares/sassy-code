@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("sassy_panel", ROOT / "panel.py")
+SPEC = importlib.util.spec_from_file_location("sassy_code_panel", ROOT / "panel.py")
 panel = importlib.util.module_from_spec(SPEC)
-sys.modules["sassy_panel"] = panel
+sys.modules["sassy_code_panel"] = panel
 SPEC.loader.exec_module(panel)
 
 
@@ -215,6 +215,28 @@ class SidebarLayoutTests(unittest.TestCase):
         items = list(panel.rows_for([self.group("/one", 2)], "", set(), set()))
         lines, _, _ = panel.build_lines(items, 40, set(), "", set(), {})
         self.assertTrue(all(kind != "gap" for _, kind, _ in lines))
+
+    def test_session_rows_show_the_harness_glyph(self):
+        pi = session("pi-session", "/proj", 200.0)
+        claude = session("claude-session", "/proj", 100.0)
+        claude.harness = "claude"
+        group = panel.Group("/proj", [pi, claude])
+        items = list(panel.rows_for([group], "", set()))
+        lines, _, _ = panel.build_lines(
+            items, 40, set(), "", set(), {"/proj": "proj"}
+        )
+        texts = [text for text, kind, _ in lines if kind == "session"]
+        self.assertTrue(any("π" in text for text in texts))
+        self.assertTrue(any("✳" in text for text in texts))
+
+    def test_filter_matches_a_harness_name(self):
+        pi = session("pi-session", "/proj", 200.0)
+        claude = session("claude-session", "/proj", 100.0)
+        claude.harness = "claude"
+        group = panel.Group("/proj", [pi, claude])
+        items = list(panel.rows_for([group], "claude", set()))
+        shown = [item[2] for item in items if item[0] == "session"]
+        self.assertEqual(shown, [claude])
 
     def test_group_names_are_readable_and_unique(self):
         home = "/home/u"

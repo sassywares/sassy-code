@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LABEL="sassy-pi-test-$$"
+LABEL="sassy-code-test-$$"
 SOCKET_PATH=""
 COLD_DIR=""
 COLD_HOME=""
@@ -56,7 +56,7 @@ assert_extended_keys() {
 }
 
 assert_new_session_key() {
-  local key="${SASSY_PI_NEW_KEY:-N}" binding
+  local key="${SASSY_CODE_NEW_KEY:-N}" binding
   binding="$(tmux list-keys -T prefix -F '#{key_command}' "$key" 2>/dev/null)" \
     || fail "prefix+$key is not bound"
   case "$binding" in
@@ -78,7 +78,7 @@ COLD_CONFIG="$(mktemp -d)"
   if tmux list-sessions >/dev/null 2>&1; then
     fail "expected no tmux server before cold start"
   fi
-  SASSY_PI_TMUX_CONFIG_ONLY=1 "$ROOT/main" \
+  SASSY_CODE_TMUX_CONFIG_ONLY=1 "$ROOT/main" \
     || fail "launcher failed in cold-start config-only mode"
   assert_extended_keys
   assert_pane_keys
@@ -92,7 +92,7 @@ COLD_CONFIG=""
 printf 'PASS: cold start configures extended keys and non-repeatable prefix arrows\n'
 
 # Scenario 2: an isolated server with a custom prefix binding.
-tmux -L "$LABEL" -f /dev/null new-session -d -s sassy-pi-test
+tmux -L "$LABEL" -f /dev/null new-session -d -s sassy-code-test
 SOCKET_PATH="$(tmux -L "$LABEL" display -p '#{socket_path}')"
 export TMUX="$SOCKET_PATH"
 
@@ -100,7 +100,7 @@ export TMUX="$SOCKET_PATH"
 tmux bind-key -r -T prefix C-g display-message custom-binding
 CUSTOM_BEFORE="$(tmux list-keys -T prefix C-g)"
 
-SASSY_PI_TMUX_CONFIG_ONLY=1 "$ROOT/main" \
+SASSY_CODE_TMUX_CONFIG_ONLY=1 "$ROOT/main" \
   || fail "launcher failed in config-only mode"
 
 assert_pane_keys
@@ -121,7 +121,7 @@ tmux unbind-key -T prefix N 2>/dev/null || true
 tmux bind-key -T prefix N display-message custom-shortcut
 CUSTOM_BEFORE="$(tmux list-keys -T prefix N)"
 
-SASSY_PI_TMUX_CONFIG_ONLY=1 "$ROOT/main" 2>/dev/null \
+SASSY_CODE_TMUX_CONFIG_ONLY=1 "$ROOT/main" 2>/dev/null \
   || fail "launcher failed with a taken shortcut key"
 
 CUSTOM_AFTER="$(tmux list-keys -T prefix N)"

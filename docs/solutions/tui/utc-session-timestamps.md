@@ -1,5 +1,5 @@
 ---
-title: Parse Pi session timestamps as UTC, never as local time
+title: Parse session timestamps as UTC, never as local time
 category: tui
 tags: [timestamps, timezone, utc, rel-time, session-store]
 created: 2026-10-23
@@ -16,8 +16,8 @@ minute **active** window, sorting, handoff detection — inherited the shift.
 
 ## Root cause
 
-Pi writes ISO-8601 timestamps in UTC (`2026-10-23T04:26:42.592Z`). The parser
-did:
+Pi and Claude Code both write ISO-8601 timestamps in UTC
+(`2026-10-23T04:26:42.592Z`). The parser did:
 
 ```python
 time.mktime(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))

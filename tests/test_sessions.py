@@ -9,11 +9,12 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("sassy_panel", ROOT / "panel.py")
+SPEC = importlib.util.spec_from_file_location("sassy_code_panel", ROOT / "panel.py")
 panel = importlib.util.module_from_spec(SPEC)
-sys.modules["sassy_panel"] = panel
+sys.modules["sassy_code_panel"] = panel
 SPEC.loader.exec_module(panel)
 
 
@@ -97,6 +98,183 @@ class ParseTests(unittest.TestCase):
             )
 
 
+class ClaudeParseTests(unittest.TestCase):
+    SID = "11111111-2222-3333-4444-555555555555"
+
+    def write(self, tmp: str, lines: list[dict]) -> str:
+        path = Path(tmp) / f"{self.SID}.jsonl"
+        path.write_text("".join(json.dumps(o) + "\n" for o in lines))
+        return str(path)
+
+    def entry(self, kind: str, ts: str, **extra) -> dict:
+        base = {
+            "type": kind,
+            "sessionId": self.SID,
+            "cwd": "/proj",
+            "timestamp": ts,
+        }
+        base.update(extra)
+        return base
+
+    def test_claude_transcript_identity_preview_and_completion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write(tmp, [
+                self.entry(
+                    "user", "2026-10-23T04:26:42.592Z",
+                    origin={"kind": "human"},
+                    message={"role": "user", "content": "fix the login bug"},
+                ),
+                self.entry(
+                    "assistant", "2026-10-23T04:26:43.592Z",
+                    message={
+                        "role": "assistant", "stop_reason": "end_turn",
+                        "content": [{"type": "text", "text": "done"}],
+                    },
+                ),
+            ])
+            s = panel.parse_session(path, "claude")
+            self.assertIsNotNone(s)
+            self.assertEqual(s.harness, "claude")
+            self.assertEqual(s.id, self.SID)
+            self.assertEqual(s.cwd, "/proj")
+            self.assertEqual(s.preview, "fix the login bug")
+            self.assertTrue(s.is_complete())
+            self.assertEqual(
+                s.created,
+                datetime(
+                    2026, 10, 23, 4, 26, 42, 592000, tzinfo=timezone.utc
+                ).timestamp(),
+            )
+
+    def test_tool_use_and_tool_result_keep_the_turn_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write(tmp, [
+                self.entry(
+                    "user", "2026-10-23T04:26:42.592Z",
+                    origin={"kind": "human"},
+                    message={"role": "user", "content": "run tests"},
+                ),
+                self.entry(
+                    "assistant", "2026-10-23T04:26:43.592Z",
+                    message={
+                        "role": "assistant", "stop_reason": "tool_use",
+                        "content": [{"type": "tool_use", "name": "Bash"}],
+                    },
+                ),
+                self.entry(
+                    "user", "2026-10-23T04:26:44.592Z",
+                    message={
+                        "role": "user", "content": [
+                            {"type": "tool_result", "content": "ok"}
+                        ],
+                    },
+                ),
+            ])
+            s = panel.parse_session(path, "claude")
+            self.assertIsNotNone(s)
+            self.assertEqual(s.last_role, "toolResult")
+            self.assertFalse(s.is_complete())
+
+    def test_api_error_is_an_error_and_sidechains_are_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write(tmp, [
+                self.entry(
+                    "user", "2026-10-23T04:26:42.592Z",
+                    origin={"kind": "human"},
+                    message={"role": "user", "content": "hello"},
+                ),
+                self.entry(
+                    "assistant", "2026-10-23T04:26:43.592Z",
+                    isApiErrorMessage=True, error="billing_error",
+                    message={
+                        "role": "assistant", "stop_reason": "stop_sequence",
+                        "content": [{"type": "text", "text": "no access"}],
+                    },
+                ),
+                # A subagent's newest turn must not change the main status.
+                self.entry(
+                    "assistant", "2026-10-23T04:26:44.592Z",
+                    isSidechain=True, sessionId="99999999-8888-7777-6666-555555555555",
+                    cwd="/subagent",
+                    message={
+                        "role": "assistant", "stop_reason": "tool_use",
+                        "content": [{"type": "tool_use"}],
+                    },
+                ),
+            ])
+            s = panel.parse_session(path, "claude")
+            self.assertIsNotNone(s)
+            self.assertEqual(s.id, self.SID)
+            self.assertEqual(s.cwd, "/proj")
+            self.assertEqual(s.status, "error")
+            self.assertTrue(s.is_complete())
+
+    def test_meta_and_local_command_entries_are_not_previews(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write(tmp, [
+                self.entry(
+                    "user", "2026-10-23T04:26:42.592Z", isMeta=True,
+                    message={"role": "user", "content": "system reminder"},
+                ),
+                self.entry(
+                    "user", "2026-10-23T04:26:43.592Z",
+                    origin={"kind": "human"},
+                    message={"role": "user", "content": "real question"},
+                ),
+            ])
+            s = panel.parse_session(path, "claude")
+            self.assertIsNotNone(s)
+            self.assertEqual(s.preview, "real question")
+
+
+class CommandTests(unittest.TestCase):
+    def test_harness_is_detected_for_native_and_npm_claude(self):
+        self.assertEqual(
+            panel.command_harness("claude --resume abc"), "claude"
+        )
+        self.assertEqual(
+            panel.command_harness(
+                "node /opt/homebrew/lib/node_modules/@anthropic-ai/"
+                "claude-code/cli.js --resume abc"
+            ),
+            "claude",
+        )
+        self.assertEqual(panel.command_harness("pi --session abc"), "pi")
+
+    def test_a_shell_wrapper_mentioning_claude_is_not_the_agent(self):
+        command = "sh -c 'claude --resume abc; exec zsh'"
+        self.assertIsNone(panel.command_harness(command))
+        self.assertIsNone(
+            panel.command_harness("grep claude-code /tmp/log")
+        )
+        self.assertIsNone(
+            panel.command_harness("echo @anthropic-ai/claude-code")
+        )
+
+    def test_session_arguments_are_harness_specific(self):
+        self.assertEqual(
+            panel.session_id_from_command("pi --session abc", "pi"), "abc"
+        )
+        self.assertEqual(
+            panel.session_id_from_command(
+                "claude --resume abc", "claude"
+            ),
+            "abc",
+        )
+        self.assertEqual(
+            panel.session_id_from_command(
+                "claude -r abc", "claude"
+            ),
+            "abc",
+        )
+        self.assertEqual(
+            panel.session_id_from_command(
+                "claude --session-id=abc", "claude"
+            ),
+            "abc",
+        )
+
+
 class SwitchTests(unittest.TestCase):
     def test_handoff_successor_is_followed(self):
         old = session("old", 100.0)
@@ -155,3 +333,34 @@ class SwitchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class CacheTests(unittest.TestCase):
+    def test_unchanged_file_still_ages_from_active_to_idle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = datetime(
+                2026, 10, 23, 4, 26, 42, tzinfo=timezone.utc
+            ).timestamp()
+            path = Path(tmp) / "s.jsonl"
+            path.write_text(
+                json.dumps({
+                    "type": "session",
+                    "id": "cached01",
+                    "cwd": "/proj",
+                    "timestamp": "2026-10-23T04:26:42.000Z",
+                }) + "\n" + json.dumps({
+                    "type": "message",
+                    "timestamp": "2026-10-23T04:26:42.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "done"}],
+                        "stopReason": "stop",
+                    },
+                }) + "\n"
+            )
+            with mock.patch.object(panel.time, "time", return_value=base + 10):
+                first = panel.read_session(str(path), "pi")
+            with mock.patch.object(panel.time, "time", return_value=base + 1000):
+                second = panel.read_session(str(path), "pi")
+            self.assertEqual(first.status, "active")
+            self.assertEqual(second.status, "idle")

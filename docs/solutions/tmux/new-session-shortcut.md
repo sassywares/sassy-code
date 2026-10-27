@@ -16,7 +16,7 @@ missing. The obvious shortcuts are all wrong:
 - a bare key would be stolen from Pi's prompt,
 - a key bound in the `root` table would break normal typing,
 - `select-pane -L \; send-keys n` types `n` into whatever pane happens to be on
-  the left when the window is not a sassy-pi layout.
+  the left when the window is not a sassy-code layout.
 
 ## Solution
 
@@ -38,7 +38,7 @@ panel.py --new-session --pane #{pane_id}
 reads it, so the panel runs its normal `n` path: spawn in the highlighted
 project, tag the pane, swap it into the viewer, write the current-session state.
 The key never moves focus; the viewer stays in front of the user. A window with
-no panel gets a `sassy-pi: no control panel in this window` message instead of
+no panel gets a `sassy-code: no control panel in this window` message instead of
 stray input.
 
 ## Choosing the key
@@ -53,7 +53,7 @@ tmux list-keys -T prefix -F '#{key_command}' N   # empty means free
 (`next-window`), as are `C-n`, `C-p`, and the other control keys. The installer
 never overwrites a binding: it refuses (with a note) when the key is taken, and
 rebinds only when the existing command already contains `--new-session`, so
-relaunching refreshes the panel's path. `SASSY_PI_NEW_KEY` changes the key.
+relaunching refreshes the panel's path. `SASSY_CODE_NEW_KEY` changes the key.
 
 ## Prevention
 

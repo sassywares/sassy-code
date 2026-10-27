@@ -19,9 +19,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("sassy_panel", ROOT / "panel.py")
+SPEC = importlib.util.spec_from_file_location("sassy_code_panel", ROOT / "panel.py")
 panel = importlib.util.module_from_spec(SPEC)
-sys.modules["sassy_panel"] = panel
+sys.modules["sassy_code_panel"] = panel
 SPEC.loader.exec_module(panel)
 
 
@@ -30,9 +30,11 @@ class BackgroundLifecycleTests(unittest.TestCase):
 
     def setUp(self):
         BackgroundLifecycleTests.counter += 1
-        self.tmp = Path(tempfile.mkdtemp(prefix="sassy-pi-test-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="sassy-code-test-"))
         self.sessions = self.tmp / "sessions"
         (self.sessions / "project").mkdir(parents=True)
+        self.claude_sessions = self.tmp / "claude-projects"
+        self.claude_sessions.mkdir()
         self.fake_bin = self.tmp / "bin"
         self.fake_bin.mkdir()
         self.fake_pi = self.fake_bin / "pi"
@@ -52,6 +54,25 @@ class BackgroundLifecycleTests(unittest.TestCase):
             "while :; do sleep 1; done\n"
         )
         self.fake_pi.chmod(0o755)
+
+        # A Claude Code stand-in that understands the resume/new flags.
+        self.fake_claude = self.fake_bin / "claude"
+        self.fake_claude.write_text(
+            "#!/usr/bin/env bash\n"
+            "sid=''\n"
+            "while [ $# -gt 0 ]; do\n"
+            "  case \"$1\" in\n"
+            "    --resume|-r) sid=\"$2\"; shift 2 ;;\n"
+            "    --resume=*) sid=\"${1#*=}\"; shift ;;\n"
+            "    --session-id) sid=\"$2\"; shift 2 ;;\n"
+            "    --session-id=*) sid=\"${1#*=}\"; shift ;;\n"
+            "    *) shift ;;\n"
+            "  esac\n"
+            "done\n"
+            "trap 'exit 0' TERM INT HUP\n"
+            "while :; do sleep 1; done\n"
+        )
+        self.fake_claude.chmod(0o755)
 
         self.old_env = {
             key: os.environ.get(key)
@@ -73,7 +94,8 @@ class BackgroundLifecycleTests(unittest.TestCase):
         os.environ["TMUX_PANE"] = self.panel_id
         os.environ["PATH"] = f"{self.fake_bin}:{self.old_env['PATH'] or ''}"
         self.tmux("set-environment", "-g", "PATH", os.environ["PATH"])
-        panel.SESSIONS_DIR = str(self.sessions)
+        panel.PI_SESSIONS_DIR = str(self.sessions)
+        panel.CLAUDE_SESSIONS_DIR = str(self.claude_sessions)
         panel.STATE_FILE = str(self.tmp / "current")
         panel.REAP_GRACE = 0.2
 
@@ -156,6 +178,42 @@ class BackgroundLifecycleTests(unittest.TestCase):
         with path.open("a") as f:
             f.write(json.dumps(entry) + "\n")
 
+    def write_claude_session(
+        self, sid: str, stop: str = "tool_use", cwd: str = "",
+        offset: float = 0.0, error: bool = False,
+    ):
+        ts = self.utc_iso(offset)
+        cwd = cwd or str(self.tmp)
+        project = self.claude_sessions / (
+            "-" + cwd.strip("/").replace("/", "-")
+        )
+        project.mkdir(parents=True, exist_ok=True)
+        path = project / f"{sid}.jsonl"
+        common = {"cwd": cwd, "sessionId": sid, "timestamp": ts}
+        user = dict(common, type="user", origin={"kind": "human"},
+                    message={"role": "user", "content": sid})
+        assistant = dict(
+            common, type="assistant", isApiErrorMessage=error,
+            message={"role": "assistant", "stop_reason": stop,
+                     "content": [{"type": "text", "text": "working"}]},
+        )
+        path.write_text(
+            "".join(json.dumps(o) + "\n" for o in (user, assistant))
+        )
+        return path
+
+    def append_claude_stop(self, sid: str, stop: str = "end_turn"):
+        path = next(self.claude_sessions.glob(f"*/{sid}.jsonl"))
+        ts = self.utc_iso()
+        entry = {
+            "cwd": str(self.tmp), "sessionId": sid, "timestamp": ts,
+            "type": "assistant",
+            "message": {"role": "assistant", "stop_reason": stop,
+                        "content": [{"type": "text", "text": "done"}]},
+        }
+        with path.open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+
     def group_session(self, sid: str):
         groups = panel.load_groups()
         return groups, panel.session_index(groups)[sid]
@@ -225,20 +283,23 @@ class BackgroundLifecycleTests(unittest.TestCase):
         return False
 
     def pi_pid_in(self, pane_id: str):
+        return self.agent_pid_in(pane_id, "pi")
+
+    def agent_pid_in(self, pane_id: str, harness: str):
         pane = self.pane_by_id(pane_id)
         if not pane:
             return None
-        # The pane's root is a shell whose command text mentions `pi`; pick the
-        # actual Pi descendant deterministically instead of a set-order match.
-        pi_procs = sorted(
+        # The pane's root is a shell whose command text mentions the agent; pick
+        # the actual descendant deterministically instead of a set-order match.
+        agents = sorted(
             (
                 proc
                 for proc in panel.pane_processes(pane, panel.process_table())
-                if panel.command_is_pi(proc.command)
+                if panel.command_harness(proc.command) == harness
             ),
             key=lambda proc: proc.pid,
         )
-        return pi_procs[0].pid if pi_procs else None
+        return agents[0].pid if agents else None
 
     # -- tests -----------------------------------------------------------
 
@@ -486,6 +547,53 @@ class BackgroundLifecycleTests(unittest.TestCase):
         self.assertNotEqual(viewer, old_pane)
         tag = self.pane_by_id(viewer).tag
         self.assertTrue(tag and tag != "old", "new pane should be tagged")
+
+    def test_claude_session_presents_with_resume_and_stays_running(self):
+        sid = "11111111-2222-3333-4444-555555555555"
+        self.write_claude_session(sid, "tool_use")
+        groups, s = self.group_session(sid)
+        self.assertEqual(s.harness, "claude")
+
+        self.assertIsNone(self.present(sid))
+        pane_id = panel.pane_map(self.panes())[sid]
+        _, running = self.group_session(sid)
+        self.assertEqual(running.status, "running")
+        pid = self.agent_pid_in(pane_id, "claude")
+        self.assertIsNotNone(pid)
+        command = next(
+            proc.command
+            for proc in panel.pane_processes(
+                self.pane_by_id(pane_id), panel.process_table()
+            )
+            if proc.pid == pid
+        )
+        self.assertIn("--resume", command)
+        self.assertIn(sid, command)
+        self.assertEqual(panel.pane_running_session(
+            self.pane_by_id(pane_id), panel.process_table()
+        ), sid)
+
+    def test_new_session_can_start_a_claude_session(self):
+        groups = panel.load_groups()
+        self.assertIsNone(
+            panel.new_session(
+                self.original_viewer, str(self.tmp), groups, {}, "claude"
+            )
+        )
+        viewer = self.visible_viewer()
+        tag = self.pane_by_id(viewer).tag
+        self.assertTrue(tag)
+        pid = self.agent_pid_in(viewer, "claude")
+        self.assertIsNotNone(pid, "a new Claude session should be spawned")
+        command = next(
+            proc.command
+            for proc in panel.pane_processes(
+                self.pane_by_id(viewer), panel.process_table()
+            )
+            if proc.pid == pid
+        )
+        self.assertIn("--session-id", command)
+        self.assertIn(tag, command)
 
     def test_quit_and_reopen_preserves_pending_session(self):
         self.write_session("pending", "toolUse")

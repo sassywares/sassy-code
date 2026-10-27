@@ -1,6 +1,6 @@
 # CONCEPTS.md
 
-Vocabulary used across `sassy-pi`. Use these words in code, commits, and
+Vocabulary used across `sassy-code`. Use these words in code, commits, and
 discussions.
 
 ## The layout
@@ -15,11 +15,11 @@ slot, not an identity: the pane occupying it changes when sessions are swapped.
 **Foreground session** — the session currently occupying the session viewer.
 *Avoid: active pane, selected process.*
 
-**Background session** — a live session hidden in the dedicated `sassy-pi-bg`
+**Background session** — a live session hidden in the dedicated `sassy-code-bg`
 tmux session, one single-pane window per session. It keeps running when another
 session is shown. *Avoid: parked session, suspended session.*
 
-**Managed pane** — a viewer or background pane that sassy-pi controls. Managed
+**Managed pane** — a viewer or background pane that sassy-code controls. Managed
 panes carry the `@sassy_session=<id>` pane option, which travels with the pane
 and is the authoritative session identity after swaps and restarts.
 
@@ -33,8 +33,18 @@ rendered as a single collapsible heading.
 
 ## The domain
 
-**Session store** — the on-disk collection of Pi conversations, grouped by
-working directory, that the panel reads to build its list.
+**Session store** — the on-disk collection of conversations, grouped by working
+directory, that the panel reads to build its list. There is one store per
+harness: Pi's `~/.pi/agent/sessions/` and Claude Code's `~/.claude/projects/`.
+
+**Harness** — the agent runtime that owns a session and its transcript format.
+Supported harnesses are **Pi** and **Claude Code**; each has its own resume
+command (`pi --session`, `claude --resume`) and terminal stop reasons. *Avoid:
+tool, agent type, provider.*
+
+**Harness mark** — the small glyph drawn before a session title: `π` for Pi and
+`✳` for Claude Code. It identifies the harness without adding a second column.
+*Avoid: icon, logo, badge.*
 
 **Present** — putting a session in the session viewer by swapping its live pane
 with the pane currently there. The displaced process moves to the background; it
@@ -51,26 +61,30 @@ done or its Pi process has exited. Reaping never touches the foreground session.
 before it is reaped, so a session file that lags the live process cannot cause a
 just-switched-away turn to be killed. *Avoid: delay, timeout.*
 
-**Reload** — the `r` action: typing `/reload` into every managed Pi pane so each
-session discovers extensions, skills, templates, themes, keybindings, and
-context files again, then refreshing the panel's session list. The Pi processes
-stay alive; this is not a restart. It is a deliberate hard refresh and may
-interrupt an in-flight turn. *Avoid: restart, respawn.*
+**Reload** — the `r` action: typing `/reload` into every managed **Pi** pane so
+each session discovers extensions, skills, templates, themes, keybindings, and
+context files again, then refreshing the panel's session list. Claude Code has
+no equivalent, so its panes are left alone. The Pi processes stay alive; this is
+not a restart. It is a deliberate hard refresh and may interrupt an in-flight
+turn. *Avoid: restart, respawn.*
 
 **Placeholder** — a bare shell swapped into the session viewer while a live
 session is preserved in the background, so the visible window can be removed
 without destroying that session.
 
 **Pending turn** — a session whose latest turn is unresolved: the last message
-is from the user or a tool, the assistant is at `stopReason=toolUse`, or no
-terminal assistant stop reason has been recorded yet.
+is from the user or a tool, the assistant is at `stopReason=toolUse` /
+`stop_reason=tool_use`, or no terminal assistant stop reason has been recorded
+yet.
 
-**Completion** — the latest assistant message ending with `stop`, `error`, or
-`aborted`. A hidden completed session is reaped after the refresh grace.
+**Completion** — the latest assistant message ending with a terminal stop
+reason: `stop`, `error`, or `aborted` for Pi; `end_turn`, `stop_sequence`,
+`max_tokens`, or `refusal` for Claude Code. A hidden completed session is reaped
+after the refresh grace.
 
-**External process** — a live Pi process for a session that is running outside
-the managed viewer/background panes. The panel refuses to present that session
-until the external process exits, rather than starting a duplicate.
+**External process** — a live agent process for a session that is running
+outside the managed viewer/background panes. The panel refuses to present that
+session until the external process exits, rather than starting a duplicate.
 
 **In-process switch** — Pi replacing the session inside the same process
 (`/handoff`, `/fork`, `/clone`), so the pane's command line and pane option
