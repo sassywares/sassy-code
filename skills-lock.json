@@ -17,7 +17,7 @@
       "source": "sassywares/sassy-skills",
       "sourceType": "github",
       "skillPath": "skills/sassy-commit-push-pr/SKILL.md",
-      "computedHash": "74fb2b9c7d8590e030dc736f7300c71ef647c785d3ece5705ab22af53653c01e"
+      "computedHash": "ab9b11c4850b710a7bf7cc8dde73d8de033b7ef98b516c9fbb6b9dd210f5eb39"
     },
     "sassy-compound": {
       "source": "sassywares/sassy-skills",
@@ -35,7 +35,7 @@
       "source": "sassywares/sassy-skills",
       "sourceType": "github",
       "skillPath": "skills/sassy-debug/SKILL.md",
-      "computedHash": "64f16c4356ea4630d568b2b0db5372617c52bc98b35f081e3bfbb73412dd595a"
+      "computedHash": "0a046834666271d678d3e4b27c442a3b6d4467c8398a8e3c99194e21641dafe5"
     },
     "sassy-handbook": {
       "source": "sassywares/sassy-skills",
@@ -53,7 +53,7 @@
       "source": "sassywares/sassy-skills",
       "sourceType": "github",
       "skillPath": "skills/sassy-lfg/SKILL.md",
-      "computedHash": "293b7ee21eb092c89f01a739b416b8e279e591c4984a2d0754388da5d6d84cf6"
+      "computedHash": "74689867730a59fa324ed46cf3c3204912a2ac315c4eec69b3bbdbc10fb9489f"
     },
     "sassy-plan": {
       "source": "sassywares/sassy-skills",
@@ -77,13 +77,13 @@
       "source": "sassywares/sassy-skills",
       "sourceType": "github",
       "skillPath": "skills/sassy-setup/SKILL.md",
-      "computedHash": "f21e62f56451d6c2c134445aeb7b873273080f19d483ebbbad2c137e2156da58"
+      "computedHash": "1464afcaec3ee83dbeb995213500e4b519aba6fa63cb38373fbd09bb99cf94eb"
     },
     "sassy-ship": {
       "source": "sassywares/sassy-skills",
       "sourceType": "github",
       "skillPath": "skills/sassy-ship/SKILL.md",
-      "computedHash": "eb356c30e5416ca7442256711d1f545f72b5a36824e66f6bd8a90cd1764e6fa7"
+      "computedHash": "f0d0edd66d2a04741085a1b99e4beda10aac1c4fe3f9206bee17ae7a6555b8d0"
     },
     "sassy-skill": {
       "source": "sassywares/sassy-skills",
@@ -101,7 +101,7 @@
       "source": "sassywares/sassy-skills",
       "sourceType": "github",
       "skillPath": "skills/sassy-work/SKILL.md",
-      "computedHash": "375fe00421a85efd552ce90a4025856323a6c673ffc5c4b508065ee97d655448"
+      "computedHash": "487d1c0c452e721242fda49bf27c6b624f9f11e9cc5f4732b721c9ea72855583"
     }
   }
 }
