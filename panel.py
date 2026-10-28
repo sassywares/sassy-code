@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -94,6 +95,8 @@ class Session:
     last_role: str | None = None
     last_stop_reason: str | None = None
     last_error: bool = False
+    # Background task ids announced but not yet closed (Claude Code only).
+    open_tasks: frozenset[str] = frozenset()
 
     @property
     def title(self) -> str:
@@ -101,6 +104,8 @@ class Session:
 
     def is_complete(self) -> bool:
         """True once the latest turn has a terminal assistant stop reason."""
+        if self.open_tasks:
+            return False  # background work outlives the main thread's turn
         if self.last_role in ("user", "toolResult"):
             return False
         return self.last_stop_reason in TERMINAL_STOP_REASONS
@@ -176,6 +181,116 @@ def clean_preview(txt: str) -> str:
     # Claude Code records slash commands as tagged prompt text.
     txt = re.sub(r"</?command-(?:name|args|message)>?", " ", txt)
     return re.sub(r"\s+", " ", txt).strip()
+
+
+def char_width(ch: str) -> int:
+    """Terminal columns for one character: wide = 2, combining/zero-width = 0."""
+    if unicodedata.combining(ch) or unicodedata.category(ch) in ("Mn", "Me", "Cf"):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def display_width(text: str) -> int:
+    """Columns for a string; U+FE0F widens the previous character to emoji."""
+    total, prev = 0, 0
+    for c in text:
+        if c == "\ufe0f":
+            if prev == 1:
+                total += 1
+                prev = 2
+            continue
+        prev = char_width(c)
+        total += prev
+    return total
+
+
+def truncate_cols(text: str, cols: int) -> str:
+    """Fit text into `cols` terminal columns, ending with `…` when cut."""
+    if display_width(text) <= cols:
+        return text
+    if cols <= 0:
+        return ""
+    out = ""
+    for ch in text:
+        if display_width(out + ch) > cols - 1:
+            break
+        out += ch
+    return out + "…"
+
+
+def fit_cols(text: str, cols: int) -> str:
+    """Truncate then right-pad with spaces to exactly `cols` columns."""
+    text = truncate_cols(text, cols)
+    return text + " " * max(0, cols - display_width(text))
+
+
+# Harness-injected prompt wrappers that are never a human title.
+CLAUDE_NON_PROMPT_PREFIXES = (
+    "<task-notification", "<system-reminder", "<agent-message",
+    "<local-command-", "<command-stdout", "Caveat:",
+)
+CLAUDE_TASK_ID_RE = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
+# Background launch results, matched at the start of the result body (group 1
+# = task id) and only for the tool_use that launched them. The Agent wording is
+# confirmed on disk; the Bash wording follows Claude Code's documented text.
+CLAUDE_TASK_OPEN_RES = {
+    "agent": re.compile(r"\A\s*Async agent launched successfully.*?agentId:\s*([\w-]+)", re.S),
+    "bash": re.compile(r"\A\s*(?:Command )?running in background with ID:\s*([\w-]+)", re.I),
+}
+SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+
+
+def claude_prompt_title(txt: str) -> str:
+    """One-line title from a Claude prompt; "" when it is only harness text."""
+    txt = SYSTEM_REMINDER_RE.sub(" ", txt).strip()
+    if txt.startswith(CLAUDE_NON_PROMPT_PREFIXES):
+        return ""
+    m = re.search(r"<command-args>(.*?)</command-args>", txt, re.S)
+    if m:
+        txt = m.group(1)
+    elif txt.startswith("<command-"):
+        return ""  # bare slash command: a later prompt supplies the title
+    # Pasted bodies are what the user typed about: keep the text, drop the tags.
+    txt = re.sub(r"</?pasted_content[^>]*>", " ", txt)
+    return clean_preview(txt)
+
+
+def _claude_launches(content, launches: dict[str, str]) -> None:
+    """Remember tool_use ids that start background work (id -> result kind)."""
+    if not isinstance(content, list):
+        return
+    for b in content:
+        if not isinstance(b, dict) or b.get("type") != "tool_use":
+            continue
+        args = b.get("input")
+        if b.get("name") in ("Agent", "Task"):
+            launches[b.get("id")] = "agent"
+        elif b.get("name") == "Bash" and isinstance(args, dict) \
+                and args.get("run_in_background"):
+            launches[b.get("id")] = "bash"
+
+
+def _claude_task_ids(content, launches: dict[str, str]) -> tuple[set[str], set[str]]:
+    """(opened, closed) background task ids announced by one entry."""
+    opened: set[str] = set()
+    closed: set[str] = set()
+    if isinstance(content, list):
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                kind = launches.get(b.get("tool_use_id"))
+                if kind:
+                    body = b.get("content")
+                    body = body if isinstance(body, str) else text_of(body)
+                    opened.update(CLAUDE_TASK_OPEN_RES[kind].findall(body))
+        blocks = [b.get("text", "") for b in content
+                  if isinstance(b, dict) and b.get("type") == "text"]
+    else:
+        blocks = [content] if isinstance(content, str) else []
+    for block in blocks:
+        block = SYSTEM_REMINDER_RE.sub(" ", block)
+        if block.lstrip().startswith("<task-notification"):
+            closed.update(CLAUDE_TASK_ID_RE.findall(block))
+    return opened, closed
 
 
 def _load(line: str):
@@ -312,6 +427,10 @@ def parse_claude_session(path: str) -> Session | None:
 
     last_role = None
     last_is_error = False
+    summary = custom = ai = ""
+    opened_all: set[str] = set()
+    closed_all: set[str] = set()
+    launches: dict[str, str] = {}
     for line in lines:
         o = _load(line)
         if not o:
@@ -321,21 +440,32 @@ def parse_claude_session(path: str) -> Session | None:
             s.last_ts = max(s.last_ts, ts)
             if not s.created:
                 s.created = ts
+        if o.get("type") == "queue-operation":
+            # Notifications are also queued while the turn is still running.
+            closed_all |= _claude_task_ids(o.get("content"), launches)[1]
+            continue
         if o.get("isSidechain"):
             continue
         # Identity comes from the main thread only: a subagent entry may carry
         # a different session id and must not rename the parent session.
         if o.get("sessionId"):
             s.id = str(o["sessionId"])
-        if o.get("cwd"):
-            s.cwd = str(o["cwd"])
+        if o.get("cwd") and not s.cwd:
+            s.cwd = str(o["cwd"])  # launch cwd: later `cd`s must not regroup
 
         t = o.get("type")
         if t == "summary":
-            s.name = o.get("summary", "") or s.name
+            summary = o.get("summary", "") or summary
+        elif t == "custom-title":
+            custom = o.get("customTitle", "") or custom
+        elif t == "ai-title":
+            ai = o.get("aiTitle", "") or ai
         elif t == "user":
             m = o.get("message", {})
             content = m.get("content")
+            opened, closed = _claude_task_ids(content, launches)
+            opened_all |= opened
+            closed_all |= closed
             if "tool_result" in _claude_content_types(content):
                 s.messages += 1
                 last_role, last_is_error = "toolResult", False
@@ -348,9 +478,15 @@ def parse_claude_session(path: str) -> Session | None:
                 if txt:
                     s.last_user = txt
                     if not s.preview:
-                        s.preview = clean_preview(txt)
+                        s.preview = claude_prompt_title(txt)
+            elif not s.preview and not o.get("isMeta"):
+                # Slash-command echoes are not turns but carry a title.
+                txt = text_of(content).strip()
+                if txt.startswith("<command-"):
+                    s.preview = claude_prompt_title(txt)
         elif t == "assistant":
             m = o.get("message", {})
+            _claude_launches(m.get("content"), launches)
             s.messages += 1
             last_role = "assistant"
             s.last_role = last_role
@@ -369,6 +505,11 @@ def parse_claude_session(path: str) -> Session | None:
         s.cwd = _claude_cwd_from_dir(path)
     if not s.created:
         s.created = s.last_ts
+    # A user rename beats the generated title, which beats the legacy summary.
+    s.name = next(
+        (clean_preview(c) for c in (custom, ai, summary) if c.strip()), ""
+    )
+    s.open_tasks = frozenset(opened_all - closed_all)
     s.last_error = last_is_error
     s.status = _infer_status(s)
     return s
@@ -1646,12 +1787,10 @@ def build_lines(
             suffix = rel_time(s.last_ts)
             glyph = HARNESS[s.harness]["glyph"]
             prefix = f" {sym} {glyph} "
-            tw = max(4, w - len(prefix) - len(suffix) - 2)
-            title = s.title
-            if len(title) > tw:
-                title = title[: max(1, tw - 1)] + "…"
+            tw = max(4, w - display_width(prefix) - display_width(suffix) - 2)
+            title = truncate_cols(re.sub(r"\s+", " ", s.title), tw)
             body = prefix + title
-            pad = max(1, w - len(body) - len(suffix) - 1)
+            pad = max(1, w - display_width(body) - display_width(suffix) - 1)
             lines.append((body + " " * pad + suffix, "session", idx))
         heights[idx] = len(lines) - starts[idx]
     return lines, starts, heights
@@ -1662,10 +1801,15 @@ def draw(
 ):
     stdscr.erase()
     h, w = stdscr.getmaxyx()
+
+    def put(y: int, text: str, attr: int, pad: bool = True) -> None:
+        text = (fit_cols if pad else truncate_cols)(text, w - 1)
+        stdscr.addnstr(y, 0, text, len(text), attr)
+
     title = f" Sassy Code — {sum(len(g.sessions) for g in groups)} sessions "
-    stdscr.addnstr(0, 0, title.ljust(w - 1), w - 1, curses.A_REVERSE | curses.A_BOLD)
+    put(0, title, curses.A_REVERSE | curses.A_BOLD)
     if flt:
-        stdscr.addnstr(1, 0, f" filter: {flt}", w - 1, curses.A_DIM)
+        put(1, f" filter: {flt}", curses.A_DIM, pad=False)
 
     keys = footer_lines(FOOTER_ITEMS, w)
     footer_h = len(keys)
@@ -1701,25 +1845,21 @@ def draw(
         sel = idx == cursor
         attr = curses.A_REVERSE if sel else curses.A_NORMAL
         if kind == "group":
-            stdscr.addnstr(i + list_top, 0, text.ljust(w - 1), w - 1,
-                           attr | curses.A_BOLD
-                           | (0 if sel else curses.color_pair(5)))
+            put(i + list_top, text,
+                attr | curses.A_BOLD | (0 if sel else curses.color_pair(5)))
         elif kind == "more":
-            stdscr.addnstr(i + list_top, 0, text.ljust(w - 1), w - 1,
-                           attr | (0 if sel else curses.A_DIM))
+            put(i + list_top, text, attr | (0 if sel else curses.A_DIM))
         else:
             s = items[idx][2]
             _, color = STATUS[s.status]
-            stdscr.addnstr(i + list_top, 0, text.ljust(w - 1), w - 1,
-                           attr | (0 if sel else curses.color_pair(color)))
+            put(i + list_top, text,
+                attr | (0 if sel else curses.color_pair(color)))
 
     footer = footer_lines([message.strip()], w)[:footer_h] if message else keys
     for i in range(footer_h):
         text = footer[i] if i < len(footer) else ""
-        stdscr.addnstr(
-            h - footer_h + i, 0, text.ljust(w - 1), w - 1,
-            curses.A_REVERSE | (curses.A_BOLD if message else 0),
-        )
+        put(h - footer_h + i, text,
+            curses.A_REVERSE | (curses.A_BOLD if message else 0))
     stdscr.refresh()
     return cursor, offset
 

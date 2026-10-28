@@ -66,8 +66,10 @@ session (or the project's newest session), falling back to
 
 Hidden panes are reaped only when their latest assistant message has a terminal
 stop reason (`stop`, `error`, `aborted` for Pi; `end_turn`, `stop_sequence`,
-`max_tokens`, `refusal` for Claude Code) for the full grace period, or when no
-descendant agent process is left. Switching away never force-reaps from a file
+`max_tokens`, `refusal` for Claude Code) for the full grace period and the
+session has no open background tasks (Claude Code: announced in tool results,
+closed by `<task-notification>` task ids), or when no descendant agent process
+is left. Switching away never force-reaps from a file
 read alone: the JSONL can lag the process. Visible panes are never auto-reaped.
 On quit a viewer with a live agent process is swapped into the background behind
 a placeholder shell so it survives the panel, even if its session file looks

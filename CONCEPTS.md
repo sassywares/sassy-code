@@ -55,7 +55,7 @@ started again. *Avoid: resume, open, launch.*
 their processes, scrollback, and working directories stay intact.
 
 **Reap** — removing a hidden background pane and its window once its work is
-done or its Pi process has exited. Reaping never touches the foreground session.
+done (no open background tasks) or its agent process has exited. Reaping never touches the foreground session.
 
 **Refresh grace** — the interval a hidden completed session must stay completed
 before it is reaped, so a session file that lags the live process cannot cause a
