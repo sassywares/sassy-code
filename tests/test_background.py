@@ -6,7 +6,6 @@ server with `-f /dev/null` and a fake `pi` executable on PATH.
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import shutil
@@ -17,12 +16,14 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
-ROOT = Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("sassy_code_panel", ROOT / "panel.py")
-panel = importlib.util.module_from_spec(SPEC)
-sys.modules["sassy_code_panel"] = panel
-SPEC.loader.exec_module(panel)
+from tests.panel_loader import ROOT, load_panel
+
+panel = load_panel()
+
+
+SESSION_NAME = "sassy-code"  # the dedicated session the launcher owns
 
 
 class BackgroundLifecycleTests(unittest.TestCase):
@@ -96,7 +97,10 @@ class BackgroundLifecycleTests(unittest.TestCase):
         self.tmux("set-environment", "-g", "PATH", os.environ["PATH"])
         panel.PI_SESSIONS_DIR = str(self.sessions)
         panel.CLAUDE_SESSIONS_DIR = str(self.claude_sessions)
-        panel.STATE_FILE = str(self.tmp / "current")
+        patcher = mock.patch.object(panel, "STATE_DIR", str(self.tmp / "state"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        panel.LEGACY_STATE_FILE = str(self.tmp / "legacy-current")
         panel.REAP_GRACE = 0.2
 
     def tearDown(self):
@@ -595,87 +599,306 @@ class BackgroundLifecycleTests(unittest.TestCase):
         self.assertIn("--session-id", command)
         self.assertIn(tag, command)
 
-    def test_quit_and_reopen_preserves_pending_session(self):
-        self.write_session("pending", "toolUse")
-        self.assertIsNone(self.present("pending"))
-        pane_id = panel.pane_map(self.panes())["pending"]
-        pid = self.pi_pid_in(pane_id)
+    def test_new_session_in_a_goal_nests_for_both_harnesses(self):
+        goal = panel.create_goal(str(self.tmp), "phase work")
+        for harness in ("pi", "claude"):
+            groups = panel.load_groups()
+            self.assertIsNone(
+                panel.new_session(
+                    self.original_viewer, str(self.tmp), groups, {},
+                    harness, goal.id,
+                )
+            )
+            tag = self.pane_by_id(self.visible_viewer()).tag
+            ids = panel.load_goals()[0][str(self.tmp)][0].sessions
+            self.assertIn(tag, ids)
+            self.assertIsNotNone(self.agent_pid_in(self.visible_viewer(), harness))
 
-        groups, _ = self.group_session("pending")
-        panel.preserve_active_on_quit(groups, self.original_viewer, {})
-        hidden = self.pane_by_id(pane_id)
-        self.assertIsNotNone(hidden)
-        self.assertEqual(hidden.session_name, panel.BG_SESSION)
-        self.assertEqual(self.pi_pid_in(pane_id), pid)
+    def goal_session_ids(self):
+        try:
+            data = json.loads((self.panel_state / "goals.json").read_text())
+        except (OSError, ValueError):
+            return []
+        goals = data["projects"].get(str(self.tmp), [])
+        return goals[0]["sessions"] if goals else []
 
-        viewer = self.visible_viewer()
-        self.assertIsNotNone(viewer)
-        groups, s = self.group_session("pending")
-        self.assertIsNone(panel.present_session(s, groups, viewer, {}))
-        self.assertEqual(panel.pane_map(self.panes())["pending"], pane_id)
-        self.assertEqual(self.pi_pid_in(pane_id), pid)
-        self.assertEqual(len([p for p in self.panes() if p.tag == "pending"]), 1)
+    def wait_until(self, check, timeout: float = 8.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            value = check()
+            if value:
+                return value
+            time.sleep(0.1)
+        return check()
 
-    def test_cold_start_quit_preserves_pending_viewer_without_cached_groups(self):
-        self.write_session("cold", "toolUse")
-        self.assertIsNone(self.present("cold"))
-        pane_id = panel.pane_map(self.panes())["cold"]
-        pid = self.pi_pid_in(pane_id)
+    def test_new_session_in_goal_via_n_and_the_shortcut_path(self):
+        # The panel process resolves its state dir from HOME.
+        self.panel_state = self.tmp / ".sassywares" / "sassy-code"
+        patcher = mock.patch.object(panel, "STATE_DIR", str(self.panel_state))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        panel._goals_cache = None
+        self.addCleanup(setattr, panel, "_goals_cache", None)
+        self.write_session("seed", "stop", offset=-60)
+        win = self.tmux(
+            "new-window", "-d", "-P", "-F", "#{window_id}",
+            "-n", "e2e", "sleep", "60",
+        ).strip()
+        viewer = self.tmux(
+            "list-panes", "-t", win, "-F", "#{pane_id}"
+        ).splitlines()[0]
+        panel_pane = self.tmux(
+            "split-window", "-h", "-b", "-t", win,
+            "-P", "-F", "#{pane_id}",
+            "env", f"HOME={self.tmp}",
+            f"PI_CODING_AGENT_SESSION_DIR={self.sessions}",
+            f"SASSY_CODE_CLAUDE_SESSION_DIR={self.claude_sessions}",
+            "SASSY_CODE_NEW_HARNESS=pi",
+            sys.executable, str(ROOT / "panel.py"), "--target", viewer,
+        ).strip()
+        os.environ["TMUX_PANE"] = panel_pane
 
-        # Simulate a quit before the panel ever refreshed its cached list.
-        panel.preserve_active_on_quit([], self.original_viewer, {})
+        def screen():
+            return self.tmux("capture-pane", "-p", "-t", panel_pane)
 
-        hidden = self.pane_by_id(pane_id)
-        self.assertIsNotNone(hidden)
-        self.assertEqual(hidden.session_name, panel.BG_SESSION)
-        self.assertEqual(self.pi_pid_in(pane_id), pid)
+        def keys(*args: str):
+            self.tmux("send-keys", "-t", panel_pane, *args)
 
-    def test_quit_preserves_live_viewer_with_stale_complete_file(self):
-        self.write_session("stale", "stop")
-        self.assertIsNone(self.present("stale"))
-        pane_id = panel.pane_map(self.panes())["stale"]
-        pid = self.pi_pid_in(pane_id)
-        self.assertIsNotNone(pid)
-
-        groups, stale = self.group_session("stale")
         self.assertTrue(
-            stale.is_complete(),
-            "the session file still looks complete from the previous turn",
+            self.wait_until(lambda: "seed" in screen()), screen()
         )
-        panel.preserve_active_on_quit(groups, self.original_viewer, {})
-
-        hidden = self.pane_by_id(pane_id)
-        self.assertIsNotNone(
-            hidden,
-            "a live viewer must be preserved even when the file looks complete",
+        # `:goal:create` lands the cursor on the new goal; `n` starts in it.
+        keys(":")
+        keys("-l", "goal:create Phase work")
+        keys("Enter")
+        goals_file = self.panel_state / "goals.json"
+        self.assertTrue(
+            self.wait_until(
+                lambda: goals_file.exists() and "(0)" in screen()
+            ),
+            screen(),
         )
-        self.assertEqual(hidden.session_name, panel.BG_SESSION)
-        self.assertEqual(self.pi_pid_in(pane_id), pid)
-
-    def test_quit_does_not_preserve_completed_viewer_without_live_pi(self):
-        self.write_session("finished", "stop")
-        self.assertIsNone(self.present("finished"))
-        pane_id = panel.pane_map(self.panes())["finished"]
-        pid = self.pi_pid_in(pane_id)
-        self.assertIsNotNone(pid)
-        os.kill(pid, 15)
-        deadline = time.time() + 3
-        while self.pi_pid_in(pane_id) and time.time() < deadline:
-            time.sleep(0.05)
-        self.assertIsNone(self.pi_pid_in(pane_id))
-
-        groups, _ = self.group_session("finished")
-        panel.preserve_active_on_quit(groups, self.original_viewer, {})
-
-        self.assertEqual(self.visible_viewer(), pane_id)
-        shown = self.pane_by_id(pane_id)
-        self.assertIsNotNone(shown)
-        self.assertNotEqual(shown.session_name, panel.BG_SESSION)
-        self.assertFalse(
-            any(p.tag == "finished" and p.session_name == panel.BG_SESSION
-                for p in self.panes()),
-            "a completed viewer with no live Pi needs no preservation",
+        time.sleep(0.5)  # let the cursor land on the goal row
+        keys("-l", "n")  # a goal row asks which harness; Enter keeps Pi
+        self.assertTrue(
+            self.wait_until(lambda: "Claude Code" in screen()), screen()
         )
+        keys("Enter")
+        first = self.wait_until(self.goal_session_ids)
+        self.assertEqual(len(first), 1, "n on the goal row must file the id")
+        first_id = first[0]
+
+        def agent_pane(sid):
+            def find():
+                pane = next((p for p in self.panes() if p.tag == sid), None)
+                if pane and self.agent_pid_in(pane.id, "pi"):
+                    return pane
+            return self.wait_until(find)
+
+        self.assertIsNotNone(agent_pane(first_id), "no fake agent running")
+
+        # Once the session file exists it nests under the goal; step onto it.
+        self.write_session(first_id, "toolUse", offset=-5)
+        self.assertTrue(
+            self.wait_until(lambda: first_id[:6] in screen(), 6), screen()
+        )
+        keys("Down")
+        time.sleep(0.3)
+        shown_viewer = next(
+            p.id for p in self.panes()
+            if p.tag == first_id and p.session_name != panel.BG_SESSION
+        )
+
+        # The N shortcut path: the panel receives `n` on a goal member.
+        result = self.run_panel("--new-session", "--pane", shown_viewer)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        ids = self.wait_until(
+            lambda: len(self.goal_session_ids()) == 2
+            and self.goal_session_ids()
+        )
+        self.assertEqual(ids[0], first_id)
+        second_id = ids[1]
+        self.assertIsNotNone(agent_pane(second_id), "no fake agent running")
+
+        self.write_session(second_id, "toolUse", offset=-1)
+        rows = list(panel.rows_for(panel.load_groups(), ""))
+        kinds = [(k, getattr(x, "id", None)) for k, _g, x in rows]
+        at = kinds.index(("goal", panel.load_goals()[0][str(self.tmp)][0].id))
+        self.assertEqual(
+            {sid for _k, sid in kinds[at + 1:at + 3]}, {first_id, second_id}
+        )
+        self.assertEqual(kinds[at + 3], ("session", "seed"))
+
+    def test_harness_picker_on_project_heading_and_n_shortcut_skips_it(self):
+        self.panel_state = self.tmp / ".sassywares" / "sassy-code"
+        self.write_session("seed", "stop", offset=-60)
+        win = self.tmux(
+            "new-window", "-d", "-P", "-F", "#{window_id}",
+            "-n", "pick", "sleep", "60",
+        ).strip()
+        viewer = self.tmux(
+            "list-panes", "-t", win, "-F", "#{pane_id}"
+        ).splitlines()[0]
+        panel_pane = self.tmux(
+            "split-window", "-h", "-b", "-t", win,
+            "-P", "-F", "#{pane_id}",
+            "env", f"HOME={self.tmp}",
+            f"PI_CODING_AGENT_SESSION_DIR={self.sessions}",
+            f"SASSY_CODE_CLAUDE_SESSION_DIR={self.claude_sessions}",
+            "SASSY_CODE_NEW_HARNESS=pi",
+            sys.executable, str(ROOT / "panel.py"), "--target", viewer,
+        ).strip()
+        os.environ["TMUX_PANE"] = panel_pane
+
+        def screen():
+            return self.tmux("capture-pane", "-p", "-t", panel_pane)
+
+        def keys(*args: str):
+            self.tmux("send-keys", "-t", panel_pane, *args)
+
+        def tagged():
+            return {p.tag for p in self.panes() if p.tag}
+
+        def agent_for(harness, known):
+            def find():
+                for p in self.panes():
+                    if p.tag and p.tag not in known and \
+                            self.agent_pid_in(p.id, harness):
+                        return p
+            return self.wait_until(find)
+
+        self.assertTrue(self.wait_until(lambda: "seed" in screen()), screen())
+        self.assertEqual(tagged(), set())
+
+        # `n` on the project heading opens the box, preselected on Pi.
+        keys("-l", "n")
+        self.assertTrue(
+            self.wait_until(lambda: "Claude Code" in screen()), screen()
+        )
+        self.assertIn("┌", screen())
+        self.assertIn("π Pi", screen())
+        # Esc creates nothing.
+        keys("Escape")
+        self.assertTrue(
+            self.wait_until(lambda: "Claude Code" not in screen(), 6), screen()
+        )
+        time.sleep(0.5)
+        self.assertEqual(tagged(), set())
+
+        # j + Enter picks the non-default harness.
+        keys("-l", "n")
+        self.assertTrue(
+            self.wait_until(lambda: "Claude Code" in screen()), screen()
+        )
+        keys("-l", "j")
+        keys("Enter")
+        claude = agent_for("claude", set())
+        self.assertIsNotNone(claude, screen())
+        self.assertIsNone(self.agent_pid_in(claude.id, "pi"))
+        self.assertNotIn("Claude Code", screen())
+
+        # A digit picks directly.
+        known = tagged()
+        keys("-l", "n")
+        self.assertTrue(
+            self.wait_until(lambda: "Claude Code" in screen()), screen()
+        )
+        keys("-l", "1")
+        self.assertIsNotNone(agent_for("pi", known), screen())
+
+        # The prefix shortcut path never opens the picker: the project's
+        # newest session (the pi one) decides the harness.
+        known = tagged()
+        result = self.run_panel(
+            "--new-session", "--pane", self.visible_viewer()
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNotNone(agent_for("pi", known), screen())
+        self.assertNotIn("Claude Code", screen())
+
+    def test_goal_done_and_delete_keys(self):
+        self.panel_state = self.tmp / ".sassywares" / "sassy-code"
+        patcher = mock.patch.object(panel, "STATE_DIR", str(self.panel_state))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        panel._goals_cache = None
+        self.addCleanup(setattr, panel, "_goals_cache", None)
+        member = self.write_session("member1", "stop", offset=-10)
+        goal = panel.create_goal(str(self.tmp), "Phase work")
+        panel.file_session_in_goal(str(self.tmp), goal.id, "member1")
+        before = member.read_bytes()
+        win = self.tmux(
+            "new-window", "-d", "-P", "-F", "#{window_id}",
+            "-n", "e2e", "sleep", "60",
+        ).strip()
+        viewer = self.tmux(
+            "list-panes", "-t", win, "-F", "#{pane_id}"
+        ).splitlines()[0]
+        panel_pane = self.tmux(
+            "split-window", "-h", "-b", "-t", win,
+            "-P", "-F", "#{pane_id}",
+            "env", f"HOME={self.tmp}",
+            f"PI_CODING_AGENT_SESSION_DIR={self.sessions}",
+            f"SASSY_CODE_CLAUDE_SESSION_DIR={self.claude_sessions}",
+            "SASSY_CODE_NEW_HARNESS=pi",
+            sys.executable, str(ROOT / "panel.py"), "--target", viewer,
+        ).strip()
+
+        def screen():
+            return self.tmux("capture-pane", "-p", "-t", panel_pane)
+
+        def keys(*args: str):
+            self.tmux("send-keys", "-t", panel_pane, *args)
+
+        def record():
+            try:
+                data = json.loads((self.panel_state / "goals.json").read_text())
+            except (OSError, ValueError):
+                return None
+            goals = data["projects"].get(str(self.tmp), [])
+            return goals[0] if goals else None
+
+        def flags_are(done, collapsed):
+            rec = record()
+            return bool(rec) and (rec["done"], rec["collapsed"]) == (
+                done, collapsed
+            )
+
+        self.assertTrue(
+            self.wait_until(lambda: "Phase work" in screen()), screen()
+        )
+        keys("Down")  # onto the goal row, below the project heading
+        keys("-l", "x")
+        self.assertTrue(self.wait_until(lambda: flags_are(True, True)), screen())
+        keys("-l", "x")
+        self.assertTrue(
+            self.wait_until(lambda: flags_are(False, False)), screen()
+        )
+
+        keys("-l", "D")
+        self.assertTrue(
+            self.wait_until(lambda: "Delete goal" in screen()), screen()
+        )
+        keys("-l", "n")
+        self.assertTrue(
+            self.wait_until(lambda: "Delete goal" not in screen()), screen()
+        )
+        self.assertIsNotNone(record())
+
+        keys("-l", "D")
+        self.assertTrue(
+            self.wait_until(lambda: "Delete goal" in screen()), screen()
+        )
+        keys("-l", "y")
+        self.assertTrue(self.wait_until(lambda: record() is None), screen())
+
+        self.assertEqual(member.read_bytes(), before)
+        rows = list(panel.rows_for(panel.load_groups(), ""))
+        self.assertIn(
+            ("session", "member1"),
+            [(k, getattr(x, "id", None)) for k, _g, x in rows],
+        )
+        self.assertNotIn("goal", [k for k, _g, _x in rows])
 
     def test_external_session_id_process_refused_without_duplicate(self):
         sid = "outside-new"
@@ -726,7 +949,7 @@ class BackgroundLifecycleTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.wait_for_file(marker), "panel never received `n`")
-        self.assertEqual(marker.read_text(), repr("n"))
+        self.assertEqual(marker.read_text(), repr("N"))
         active = [
             line.split()[0]
             for line in self.tmux(
@@ -750,6 +973,237 @@ class BackgroundLifecycleTests(unittest.TestCase):
         result = self.run_panel("--new-session", "--pane", pane)
 
         self.assertNotEqual(result.returncode, 0)
+
+    # -- quit paths --------------------------------------------------------
+
+    def dedicated_panel(self, goal: bool = False):
+        """Run the real panel inside a session named `sassy-code`."""
+        self.panel_state = self.tmp / ".sassywares" / "sassy-code"
+        patcher = mock.patch.object(panel, "STATE_DIR", str(self.panel_state))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        panel._goals_cache = None
+        self.addCleanup(setattr, panel, "_goals_cache", None)
+        self.write_session("seed", "stop", offset=-60)
+        if goal:
+            made = panel.create_goal(str(self.tmp), "Phase work")
+            panel.file_session_in_goal(str(self.tmp), made.id, "seed")
+        self.tmux(
+            "new-session", "-d", "-s", SESSION_NAME, "-x", "120", "-y", "40",
+            "-n", "main", "sleep", "120",
+        )
+        viewer = self.tmux(
+            "list-panes", "-t", f"={SESSION_NAME}", "-F", "#{pane_id}"
+        ).splitlines()[0]
+        panel_pane = self.tmux(
+            "split-window", "-h", "-b", "-t", viewer, "-P", "-F", "#{pane_id}",
+            "env", f"HOME={self.tmp}", f"PATH={os.environ['PATH']}",
+            f"PI_CODING_AGENT_SESSION_DIR={self.sessions}",
+            f"SASSY_CODE_CLAUDE_SESSION_DIR={self.claude_sessions}",
+            "SASSY_CODE_NEW_HARNESS=pi",
+            sys.executable, str(ROOT / "panel.py"), "--target", viewer,
+        ).strip()
+        self.assertTrue(
+            self.wait_until(
+                lambda: "seed" in self.tmux("capture-pane", "-p", "-t", panel_pane)
+                or "Phase work" in self.tmux("capture-pane", "-p", "-t", panel_pane)
+            )
+        )
+        return viewer, panel_pane
+
+    def agent_window(self, sid: str) -> str:
+        """A tagged live Pi in an extra window of the dedicated session."""
+        pane = self.tmux(
+            "new-window", "-d", "-t", f"={SESSION_NAME}:",
+            "-P", "-F", "#{pane_id}", "-n", f"agent-{sid}",
+            f"pi --session-id {sid}; exec sh",
+        ).strip()
+        self.tmux("set-option", "-p", "-t", pane, panel.PANE_OPTION, sid)
+        self.assertTrue(self.wait_until(lambda: self.pi_pid_in_any(pane)))
+        return pane
+
+    def pi_pid_in_any(self, pane_id: str):
+        pane = next(
+            (p for p in panel.parse_panes(self.tmux(
+                "list-panes", "-a", "-F", panel.PANE_FORMAT
+            )) if p.id == pane_id),
+            None,
+        )
+        if not pane:
+            return None
+        agents = [
+            p.pid for p in panel.pane_processes(pane, panel.process_table())
+            if panel.command_harness(p.command) == "pi"
+        ]
+        return min(agents) if agents else None
+
+    def session_names(self):
+        return self.tmux("list-sessions", "-F", "#{session_name}").split()
+
+    def attach_client(self):
+        """A control-mode client attached to the dedicated session."""
+        client = subprocess.Popen(
+            ["tmux", "-L", self.label, "-C", "attach", "-t", f"={SESSION_NAME}"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, env=self.tmux_env(),
+        )
+        self.procs.append(client)
+        self.assertTrue(self.wait_until(lambda: self.client_count() == 1))
+        return client
+
+    def client_count(self):
+        out = self.tmux("list-clients", "-t", f"={SESSION_NAME}", "-F", "#{client_name}")
+        return len(out.split())
+
+    def pane_pid(self, pane_id: str) -> int:
+        return int(self.tmux("display", "-p", "-t", pane_id, "#{pane_pid}"))
+
+    def alive(self, pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def test_every_quit_key_only_detaches(self):
+        cases = {
+            "q": [("-l", "q")],
+            "ctrl-c": [("C-c",)],
+            "D confirm then ctrl-c": [("Down",), ("-l", "D"), ("C-c",)],
+            "picker then ctrl-c": [("-l", "n"), ("C-c",)],
+        }
+        for name, steps in cases.items():
+            with self.subTest(name):
+                if SESSION_NAME in self.session_names():
+                    self.tmux("kill-session", "-t", f"={SESSION_NAME}")
+                viewer, panel_pane = self.dedicated_panel(goal=name.startswith("D"))
+                other = self.agent_window("elsewhere")
+                agent = self.pi_pid_in_any(other)
+                viewer_pid = self.pane_pid(viewer)
+                panel_pid = self.pane_pid(panel_pane)
+                client = self.attach_client()
+                for step in steps:
+                    self.tmux("send-keys", "-t", panel_pane, *step)
+                    if step == ("-l", "D"):
+                        self.assertTrue(self.wait_until(
+                            lambda: "Delete goal" in self.tmux(
+                                "capture-pane", "-p", "-t", panel_pane)
+                        ))
+                    if step == ("-l", "n"):
+                        self.assertTrue(self.wait_until(
+                            lambda: "Claude Code" in self.tmux(
+                                "capture-pane", "-p", "-t", panel_pane)
+                        ))
+                self.assertTrue(
+                    self.wait_until(lambda: self.client_count() == 0),
+                    f"{name} did not detach the client",
+                )
+                self.assertTrue(self.wait_until(lambda: client.poll() is not None))
+                time.sleep(0.5)
+                # Nothing else changed: session, panel, viewer, agents.
+                self.assertIn(SESSION_NAME, self.session_names())
+                self.assertNotIn(panel.BG_SESSION, self.session_names())
+                panes = self.tmux("list-panes", "-s", "-t", f"={SESSION_NAME}",
+                                  "-F", "#{pane_id}").split()
+                self.assertIn(panel_pane, panes)
+                self.assertIn(viewer, panes)
+                self.assertEqual(self.pane_pid(viewer), viewer_pid)
+                self.assertEqual(self.pane_pid(panel_pane), panel_pid)
+                self.assertTrue(self.alive(viewer_pid))
+                self.assertTrue(self.alive(panel_pid))
+                self.assertEqual(self.pi_pid_in_any(other), agent)
+                self.assertTrue(self.alive(agent))
+                self.assertIn(
+                    "python",
+                    self.tmux("display", "-p", "-t", panel_pane,
+                              "#{pane_current_command}").lower(),
+                )
+                # The panel is still running: a second attach sees the same
+                # panel, which detaches that client too.
+                self.attach_client()
+                self.assertEqual(self.pane_pid(panel_pane), panel_pid)
+                self.tmux("send-keys", "-t", panel_pane, "-l", "q")
+                self.assertTrue(
+                    self.wait_until(lambda: self.client_count() == 0),
+                    f"{name}: the panel stopped answering after the first detach",
+                )
+
+    def test_rerunning_main_after_detach_adds_no_second_panel(self):
+        _, panel_pane = self.dedicated_panel()
+        self.attach_client()
+        self.tmux("send-keys", "-t", panel_pane, "-l", "q")
+        self.assertTrue(self.wait_until(lambda: self.client_count() == 0))
+        env = os.environ.copy()
+        env["TMUX"] = self.socket
+        env["TMUX_PANE"] = self.panel_id  # a pane in the "vis" session
+        result = subprocess.run(
+            [str(ROOT / "main")], env=env, capture_output=True, text=True,
+            timeout=20, stdin=subprocess.DEVNULL,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        time.sleep(0.5)
+        panes = self.tmux("list-panes", "-s", "-t", f"={SESSION_NAME}",
+                          "-F", "#{pane_id}").split()
+        self.assertEqual(len(panes), 2, panes)
+        self.assertIn(panel_pane, panes)
+        windows = self.tmux("list-windows", "-t", f"={SESSION_NAME}",
+                            "-F", "#{window_id}").split()
+        self.assertEqual(len(windows), 1)
+
+    def test_detach_only_touches_the_panels_own_session(self):
+        _, panel_pane = self.dedicated_panel()
+        self.attach_client()
+        other = subprocess.Popen(
+            ["tmux", "-L", self.label, "-C", "attach", "-t", "vis"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, env=self.tmux_env(),
+        )
+        self.procs.append(other)
+        self.assertTrue(self.wait_until(
+            lambda: self.tmux("list-clients", "-t", "=vis", "-F", "#{client_name}").strip()
+        ))
+        self.tmux("send-keys", "-t", panel_pane, "-l", "q")
+        self.assertTrue(self.wait_until(lambda: self.client_count() == 0))
+        time.sleep(0.3)
+        self.assertIsNone(other.poll())
+        self.assertTrue(self.tmux("list-clients", "-t", "=vis", "-F", "#{client_name}").strip())
+
+    def test_detach_with_no_client_is_a_harmless_noop(self):
+        _, panel_pane = self.dedicated_panel()
+        self.tmux("send-keys", "-t", panel_pane, "-l", "q")
+        time.sleep(0.7)
+        self.assertIn(SESSION_NAME, self.session_names())
+        self.assertIn("python", self.tmux(
+            "display", "-p", "-t", panel_pane, "#{pane_current_command}").lower())
+        self.assertNotIn("Could not detach", self.tmux(
+            "capture-pane", "-p", "-t", panel_pane))
+
+    def test_failed_detach_shows_a_footer_message_and_keeps_running(self):
+        with mock.patch.object(panel, "panel_pane_id", return_value="%0"), \
+                mock.patch.object(panel, "tmux") as fake:
+            fake.side_effect = [
+                mock.Mock(returncode=0, stdout="s\n"),
+                mock.Mock(returncode=0, stdout="client\n"),
+                mock.Mock(returncode=1, stdout=""),
+            ]
+            self.assertEqual(panel.detach_panel(), panel.DETACH_FAILED)
+            self.assertEqual(fake.call_args_list[-1].args, ("detach-client", "-s", "=s"))
+
+    def test_failed_query_is_a_failure_but_empty_ok_is_not(self):
+        ok = lambda out: mock.Mock(returncode=0, stdout=out)
+        bad = mock.Mock(returncode=1, stdout="")
+        cases = [
+            ([bad], panel.DETACH_FAILED),
+            ([None], panel.DETACH_FAILED),
+            ([ok("s\n"), bad], panel.DETACH_FAILED),
+            ([ok("s\n"), None], panel.DETACH_FAILED),
+            ([ok("")], ""),
+            ([ok("s\n"), ok("")], ""),
+        ]
+        for effects, want in cases:
+            with mock.patch.object(panel, "panel_pane_id", return_value="%0"), \
+                    mock.patch.object(panel, "tmux", side_effect=effects):
+                self.assertEqual(panel.detach_panel(), want, effects)
 
 
 if __name__ == "__main__":

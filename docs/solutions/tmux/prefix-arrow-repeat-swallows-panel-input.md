@@ -49,7 +49,7 @@ left alone. A user binding that is byte-identical to tmux's default cannot be
 told apart and will be normalized (README:69).
 
 Configuration is applied by `ensure_tmux_config` (main:31) only once a tmux
-server exists, on both the in-tmux path (main:54) and before `attach` on a fresh
+server exists, before both the switch-client path and `attach` on a fresh
 server (main:71). The cold-start path needs `start-server \; set-option -g
 exit-empty off` (main:36-48) because `start-server` exits immediately when there
 are no sessions, which would discard the new bindings.

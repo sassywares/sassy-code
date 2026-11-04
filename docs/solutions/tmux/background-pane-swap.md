@@ -73,12 +73,15 @@ grace before reaping a hidden completed pane, including the pane just displaced
 by a swap: the JSONL can lag the process, so a file that still looks complete
 must never cause an immediate kill.
 
-On quit, any viewer with a live Pi process is swapped into the background behind
-a temporary placeholder shell so it survives the panel process, even when its
-file looks complete. The placeholder matters in the cold-start layout because
-the launcher removes the visible window when the panel exits; the working pane
-must leave that window first. A completed viewer with no live Pi needs no
-preservation.
+Quitting moves nothing. `q` and Ctrl-C only detach the client from the
+`sassy-code` session (`detach_panel()` runs `tmux detach-client -s` for the
+panel's own session); the panel keeps running, so the viewer, any other window
+and every agent stay exactly where they are, and running `sassy-code` again
+reattaches. This replaced an earlier design that stashed live agents behind
+placeholders and then killed the session: it kept finding ways to lose agents.
+End the session for good with `tmux kill-session -t sassy-code`. The launcher's
+trailing command only kills the panel pane, so a panel crash leaves the viewer,
+and the rebuild path adds a window and keeps the old one.
 
 ## Prevention
 
@@ -86,9 +89,9 @@ preservation.
 `-f /dev/null` and a fake `pi` on PATH. It asserts that switching away leaves the
 old pane and PID alive, switching back uses the same pane, completed hidden
 panes are reaped after the grace period, orphan shells are removed when Pi
-exits, external sessions (including `--session-id`) are refused, a stale
-complete file never causes a live viewer to be dropped on quit (even on a cold
-start without cached groups), and pane options survive swaps. Never point these
+exits, external sessions (including `--session-id`) are refused, quit keys only detach (session, panel, viewer and agent pids survive, a second
+attach sees the same panel, re-running `main` adds no second panel), and pane
+options survive swaps. Never point these
 tests at the user's tmux server.
 
 When changing this code, inspect pane identity rather than variable names:

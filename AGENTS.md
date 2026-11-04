@@ -14,7 +14,7 @@ instead of killing it.
 
 | Path | Role |
 |---|---|
-| `main` | Bash launcher. Builds the tmux layout, passes the viewer pane id to the panel. |
+| `main` | Bash launcher. Switches to (or creates) the dedicated `sassy-code` session, builds the layout there, passes the viewer pane id to the panel. |
 | `panel.py` | The curses control panel. Reads both harness session stores, manages viewer/background panes, renders the list, dispatches actions. |
 | `tests/` | Isolated tmux tests (`tmux -L`, `-f /dev/null`) and key-binding regressions. |
 | `CONCEPTS.md` | Vocabulary used across the repo. Read before changing user-facing terms. |
@@ -29,6 +29,7 @@ Requires `tmux`, `python3`, bash, and at least one of `pi` / `claude`. See
 ./main                                      # or the `sassy-code` shell alias
 ./panel.py --list                            # plain-text dump, no TUI
 python3 -m unittest tests.test_background    # isolated tmux lifecycle tests
+python3 -m unittest tests.test_goals tests.test_goal_lifecycle tests.test_state  # goals store, rows, state dir
 bash tests/tmux-pane-keys.sh                 # isolated key-binding regression
 bash tests/tmux-layout.sh                    # isolated narrow-panel geometry
 ```
@@ -54,15 +55,45 @@ to put it in the viewer. The displaced viewer process is swapped into the
 background, keeping its scrollback, cwd, and in-flight turn. The viewer slot is
 re-derived from the panel's tmux window after every swap because pane ids travel
 with processes. There is no harness API dependency and no server; the session
-files are the contract. Parsed files are cached by path, mtime, and size because
+files are the contract. Panel state lives in `~/.sassywares/sassy-code/`: the
+presented session (`current`) and the goals (`goals.json`). The old
+`~/.sassy-code-current` is moved there once on start, and the new file wins if
+both exist. Parsed files are cached by path, mtime, and size because
 Claude transcripts are large and the panel refreshes every two seconds.
 The panel also tags its own pane with `@sassy_panel`; the launcher binds a free
 prefix key (default `N`) to `panel.py --new-session --pane #{pane_id}`, which
-finds that tag in the focused window and sends the panel its own `n` key. That
-starts a session in the highlighted project without moving focus, and never
-duplicates the spawn path. The new session uses the harness of the highlighted
-session (or the project's newest session), falling back to
-`SASSY_CODE_NEW_HARNESS`, then to whichever harness is installed.
+finds that tag in the focused window and sends the panel the internal
+`NEW_NO_PICKER_KEY` (`N`: `n` minus the harness picker). That starts a session in the highlighted project without moving focus, and never
+duplicates the spawn path. On a goal row, or a session inside a goal, `n` (and
+`N`) files the panel-generated id into that goal before spawning (a done goal
+reopens; an unreadable store still starts a loose session and warns); project
+headings and loose sessions start loose. The new session uses the harness of
+the highlighted session. On a goal row it is the goal's newest member's
+harness, then the project's newest session's, then `SASSY_CODE_NEW_HARNESS`,
+then whichever harness is installed.
+
+Goals group sessions inside a project. `goals.json` is `{"version": 1,
+"projects": {<cwd>: [goal, ...]}}`, read through a cache keyed by mtime and
+size and written atomically (temp file in the state dir, then rename, after
+re-reading the file). A missing file means no goals; a corrupt or wrong-shape
+file hides goals, refuses edits, and is never overwritten. `rows_for()` emits a
+`goal` row (selectable; Enter/`h`/`l` persist its collapse state) followed by
+its member sessions, and an empty, expanded goal gets a sarcastic `hint` line
+in `build_lines()`. A `hint` is a line kind, not a row: it is unselectable.
+Empty goals in one project never share a hint: `goal_hint()` takes them oldest
+first, each starting at `crc32(id)` and walking to the first free line.
+A goal row's arrow sits in the harness-glyph column of a session row.
+Loose sessions and goals interleave by recency, and a goal ranks by its newest
+member. `:` opens a vim-style command line (`prompt_line`) whose commands run
+in the highlighted row's project; `:goal:create <name>` makes a goal, then
+un-collapses the project, clears the filter, and lands the cursor on it.
+Goal-row keys call testable helpers, not inline code: `R` (`rename_prefill`)
+opens `:` pre-filled `goal:rename <name>`, which `run_command` applies to the
+highlighted goal (empty or case-insensitive duplicate names refused); `x`
+(`done_goal`) toggles done, where `recency_top` sinks done goals below all active
+items and done marks collapse (reopen expands); `D` (`delete_prompt`,
+then `delete_goal_row` only on `y`) removes the record and flattens its sessions
+loose. All three go through `mutate_goals`, so a corrupt store refuses them.
 
 Hidden panes are reaped only when their latest assistant message has a terminal
 stop reason (`stop`, `error`, `aborted` for Pi; `end_turn`, `stop_sequence`,
@@ -71,10 +102,26 @@ session has no open background tasks (Claude Code: announced in tool results,
 closed by `<task-notification>` task ids), or when no descendant agent process
 is left. Switching away never force-reaps from a file
 read alone: the JSONL can lag the process. Visible panes are never auto-reaped.
-On quit a viewer with a live agent process is swapped into the background behind
-a placeholder shell so it survives the panel, even if its session file looks
-complete. Sessions already running outside managed panes are refused instead of
-duplicated.
+Quitting only detaches. `q`, Ctrl-C, Ctrl-C in the delete prompt and Ctrl-C in
+the harness picker all call `detach_panel()`, which runs `tmux detach-client -s
+=<session>` for the session the panel lives in (found from its own pane) and
+nothing else: no other session or client is touched, nothing is killed or
+moved, and the panel keeps running so a later `sassy-code` reattaches to the
+same panel, viewer and agents. No attached client is a no-op. Outside tmux (`$TMUX` unset, e.g. `panel.py
+--target ...` run by hand) there is no client, so `q` and Ctrl-C exit the panel
+instead. Ctrl-C detaches in the main loop (wherever it lands, not only while
+blocked on a key), the delete prompt and the harness picker; inside the `:` and
+`/` prompts it cancels the prompt. If the detach command or a tmux query fails the footer says "Could not
+detach" and the panel keeps running. To end the session for good, run `tmux kill-session
+-t sassy-code`. The launcher's trailing command kills only the panel pane, never
+the window, so a panel crash leaves the viewer. `sassy-code-bg` is left alone. Sessions
+already running outside managed panes are refused instead of duplicated.
+
+On a project heading or goal row, `n` first opens a boxed harness picker
+(`harness_picker()`, built from `installed_harnesses()` in `HARNESS` order,
+preselected on the inferred harness, skipped with one harness installed;
+`should_pick_harness()` is the decision). Session rows, `goal_more` rows and the
+`N` shortcut never open it.
 
 ## Conventions
 
@@ -91,8 +138,21 @@ duplicated.
 - **Pi-only actions stay Pi-only.** `r` (`/reload`) has no Claude Code
   equivalent; it targets managed Pi panes only. In-process session switches are
   a Pi concept; Claude transcripts have no session-level parent link.
-- **Dense projects.** `rows_for()` shows at most `SESSION_LIMIT` sessions per
-  project plus a `more` row; never hide a `running` session. Group headings use
+- **Goal inheritance is derived.** `attach_goals()` adds a Pi session to the
+  goal of its nearest explicitly filed `parentSession` ancestor in the same
+  project (any depth, cycle-safe, siblings included; a fork into another cwd or
+  a lineage through one stays loose) via `inherit_goal_members()`; nothing is
+  written to `goals.json`, explicit membership wins, loose lineages stay loose.
+  `/new` and `/clear` have no parent link and land loose. Membership is keyed
+  by session id, which survives resume: `pi --session <id>` keeps the header id
+  and `claude --resume <id>` reuses it (the panel never passes `--fork-session`).
+- **Dense projects.** `rows_for()` limits at two levels: at most
+  `SESSION_LIMIT` top-level items per project (a goal counts as one) plus the
+  project's `more` row, and at most `GOAL_SESSION_LIMIT` sessions per expanded
+  goal plus that goal's own `goal_more` row (expanded state keyed by goal id).
+  Never hide a `running` session: a goal holding one counts as running at
+  project level, and a collapsed goal shows `●` after its arrow. A filter
+  ignores both limits and expands goals. Group headings use
   `canonical_group_names()` (home is `root`, otherwise the folder name), and one
   blank `gap` line separates projects.
 - **Narrow panel, wide viewer.** The panel pane is the small one. If a change
@@ -108,7 +168,7 @@ duplicated.
   *and* the pane's command line; never trust the command line alone.
 - **Shortcuts reuse panel actions.** Bindings run
   `panel.py --new-session --pane #{pane_id}`, which finds the `@sassy_panel`
-  pane and `send-keys`-es the panel's own key; do not reimplement spawn, swap,
+  pane and `send-keys`-es the panel's no-picker `N` key; do not reimplement spawn, swap,
   or state handling in a binding, and never overwrite a key the user bound.
 - **Background work is lazy.** Only sessions opened through the panel get live
   panes. A working hidden pane survives; a completed hidden pane is reaped after

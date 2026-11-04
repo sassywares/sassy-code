@@ -68,10 +68,6 @@ no equivalent, so its panes are left alone. The Pi processes stay alive; this is
 not a restart. It is a deliberate hard refresh and may interrupt an in-flight
 turn. *Avoid: restart, respawn.*
 
-**Placeholder** — a bare shell swapped into the session viewer while a live
-session is preserved in the background, so the visible window can be removed
-without destroying that session.
-
 **Pending turn** — a session whose latest turn is unresolved: the last message
 is from the user or a tool, the assistant is at `stopReason=toolUse` /
 `stop_reason=tool_use`, or no terminal assistant stop reason has been recorded
@@ -112,7 +108,38 @@ for home, otherwise the folder's own name (`tap2-workspace`), grown with parent
 folders only when two projects share a name (`a/app`, `b/app`). The full cwd
 still keys grouping and collapse state. *Avoid: path, shortened path.*
 
-**Session limit** — the cap on sessions drawn under one project
-(`SESSION_LIMIT`, currently 5) before a `… N more` row. Expanding reveals the
-rest and relabels the row `… show fewer`; a **running** session is never hidden
-behind the limit. *Avoid: pagination, truncation.*
+**Session limit** — the cap on top-level items drawn under one project
+(`SESSION_LIMIT`, currently 5; a goal counts as one item) before a `… N more`
+row, whose N counts hidden items. Expanding reveals the rest and relabels that
+row `… show fewer`; a **running** session (or a goal holding one) is never
+hidden behind the limit. *Avoid: pagination, truncation.*
+
+**Goal limit** — the second cap, on sessions drawn under one expanded goal
+(`GOAL_SESSION_LIMIT`, currently 3) before the goal's own `… N more` row, whose
+N counts hidden sessions (not items). It expands and collapses independently of
+the project's row, and a running session is never hidden behind it either.
+
+**Goal** — a user-created, named folder inside one project that groups the
+sessions of one feature. One level deep (project → goal → sessions), expands
+and collapses like a project, and persists in `goals.json` under the state
+directory. Panel state only: Pi and Claude Code never know about goals. An empty
+goal shows a dim hint line that is not a cursor stop. *Avoid: folder, epic,
+workspace.*
+
+**Done goal** — a goal marked finished with `x`: it shows `✓` after its arrow,
+is collapsed, and sorts below the project's active goals and loose sessions
+(still one item toward the **session limit**). `x` again reopens it in recency
+order and expands it; starting a session in it with `n` also reopens and
+expands it. Deleting a goal (`D`, confirmed) is separate: its sessions become
+loose. *Avoid: archived, closed.*
+
+**Harness picker** — the small boxed list `n` opens on a project heading or
+goal row when more than one harness is installed: one line per installed harness
+(glyph + label), preselected on the inferred harness; `j`/`k`/arrows move,
+`1`–`9`/`Enter` pick, `Esc`/`q` cancel. Session rows and the `N` prefix shortcut
+skip it and use the inferred harness. *Avoid: harness menu, dialog.*
+
+**Command line** — the `:` prompt at the bottom of the panel. The first token is
+the command (`goal:create`, `goal:rename`) and the rest is its argument, so a goal name may
+contain `:`. Unlike `/`, which only filters, it changes state; refusals appear
+as a footer message. *Avoid: palette, ex mode.*

@@ -3,7 +3,7 @@ title: A tmux shortcut should ask the control panel, not duplicate it
 category: tmux
 tags: [keybindings, run-shell, send-keys, new-session, focus]
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-30
 ---
 
 ## Problem
@@ -32,10 +32,16 @@ panel.py --new-session --pane #{pane_id}
 1. resolves that pane's window,
 2. finds the pane in it tagged `@sassy_panel` whose foreground command is a
    Python interpreter (a stale tag on a shell is ignored),
-3. sends it the literal key `n`, the same key the panel handles when focused.
+3. sends it the literal internal key `N` (`NEW_NO_PICKER_KEY`).
+
+`N` is `n` without the harness picker: on a project heading or goal row the
+panel's `n` asks which harness, but the shortcut must start immediately with
+the inferred harness. `N` is unbound in the panel, printable (so `send-keys -l`
+delivers one byte), and mirrors the default shortcut key. Pressing `N` in the
+panel by hand behaves the same.
 
 `send-keys` writes to the pane's pty regardless of focus, and the curses loop
-reads it, so the panel runs its normal `n` path: spawn in the highlighted
+reads it, so the panel runs its normal `n` path minus the picker: spawn in the highlighted
 project, tag the pane, swap it into the viewer, write the current-session state.
 The key never moves focus; the viewer stays in front of the user. A window with
 no panel gets a `sassy-code: no control panel in this window` message instead of
@@ -59,7 +65,7 @@ relaunching refreshes the panel's path. `SASSY_CODE_NEW_KEY` changes the key.
 
 `tests/tmux-pane-keys.sh` asserts the key is installed on a cold start, is
 idempotent, and leaves a user's binding untouched. The isolated tmux tests in
-`tests/test_background.py` assert the panel of the focused window receives `n`
+`tests/test_background.py` assert the panel of the focused window receives `N`
 without focus moving, and that a tagged non-Python pane is rejected. When adding
 a shortcut, reuse a panel action through `send-keys` rather than reimplementing
 spawn or swap logic, and verify the key is free on the live server.

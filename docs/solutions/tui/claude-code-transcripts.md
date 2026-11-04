@@ -90,7 +90,9 @@ window is clock-relative: an unchanged file still ages from active to idle.
 
 - Claude Code has no session-level parent link, so the `/handoff` successor
   following that keeps a Pi pane's identity accurate does not apply. Each
-  resumed Claude session is its own row.
+  resumed Claude session is its own row. `claude --resume <id>` reuses the id
+  unless `--fork-session` is passed (the panel never does), and
+  `pi --session <id>` keeps the header id, so id-keyed goal membership survives resume.
 - `claude --resume` requires the cwd to still exist; the panel uses the parsed
   `cwd`, falling back to the encoded project directory. Resuming a deleted
   project will fail in Claude, not in the panel.

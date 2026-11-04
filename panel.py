@@ -22,8 +22,10 @@ import shutil
 import subprocess
 import sys
 import time
+import tempfile
 import unicodedata
 import uuid
+import zlib
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
@@ -37,9 +39,13 @@ CLAUDE_SESSIONS_DIR = os.environ.get(
         "projects",
     ),
 )
-STATE_FILE = os.path.expanduser("~/.sassy-code-current")
+STATE_DIR = os.path.expanduser("~/.sassywares/sassy-code")
+LEGACY_STATE_FILE = os.path.expanduser("~/.sassy-code-current")
+CURRENT_STATE = "current"
+GOALS_STATE = "goals.json"
 ACTIVE_WINDOW = 300  # seconds -> "active"
-SESSION_LIMIT = 5  # sessions shown per project before "… N more"
+SESSION_LIMIT = 5  # top-level items shown per project before "… N more"
+GOAL_SESSION_LIMIT = 3  # sessions shown per expanded goal before "… N more"
 
 BG_SESSION = "sassy-code-bg"
 DEFAULT_HARNESS = "pi"
@@ -49,6 +55,10 @@ HARNESS = {
     "claude": {"label": "Claude Code", "glyph": "✳"},
 }
 HARNESS_KEYS = tuple(HARNESS)
+# Internal panel key: `n` without the harness picker. `--new-session` sends it
+# so the prefix shortcut never asks. Plain `N` is unbound in the panel and is a
+# printable character, so `send-keys -l` delivers it as one byte.
+NEW_NO_PICKER_KEY = "N"
 PANE_OPTION = "@sassy_session"
 PANEL_OPTION = "@sassy_panel"
 REAP_GRACE = 2.0
@@ -112,9 +122,22 @@ class Session:
 
 
 @dataclass
+class Goal:
+    """A user-created folder inside one project; panel state only."""
+
+    id: str
+    name: str
+    created: float
+    done: bool = False
+    collapsed: bool = False
+    sessions: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Group:
     cwd: str
     sessions: list[Session] = field(default_factory=list)
+    goals: list[Goal] = field(default_factory=list)
 
     @property
     def last_ts(self) -> float:
@@ -722,9 +745,8 @@ def panel_pane_id() -> str:
         args.extend(["-t", target])
     args.append("#{pane_id}")
     result = tmux(*args)
-    if tmux_ok(result):
-        return result.stdout.strip().splitlines()[0]
-    return ""
+    lines = result.stdout.strip().splitlines() if tmux_ok(result) else []
+    return lines[0] if lines else ""
 
 
 def panel_window_id(panel_id: str) -> str:
@@ -736,29 +758,37 @@ def panel_window_id(panel_id: str) -> str:
     return ""
 
 
-def layout_panes(window_id: str = "") -> list[PaneInfo]:
-    """Panes in the visible window plus every background-session pane."""
-    fmt = (
-        "#{pane_id}\t#{window_id}\t#{session_name}\t#{pane_pid}\t"
-        "#{@sassy_session}"
-    )
-    result = tmux("list-panes", "-a", "-F", fmt)
-    if not tmux_ok(result):
-        return []
+PANE_FORMAT = (
+    "#{pane_id}\t#{window_id}\t#{session_name}\t#{pane_pid}\t"
+    "#{@sassy_session}"
+)
+
+
+def parse_panes(output: str) -> list[PaneInfo]:
     panes = []
-    for line in result.stdout.splitlines():
+    for line in output.splitlines():
         parts = line.rstrip("\n").split("\t", 4)
         while len(parts) < 5:
             parts.append("")
         pane_id, win, name, pid, tag = parts
-        if name != BG_SESSION and (not window_id or win != window_id):
-            continue
         try:
             pane_pid = int(pid)
         except ValueError:
             pane_pid = 0
         panes.append(PaneInfo(pane_id, win, name, pane_pid, tag))
     return panes
+
+
+def layout_panes(window_id: str = "") -> list[PaneInfo]:
+    """Panes in the visible window plus every background-session pane."""
+    result = tmux("list-panes", "-a", "-F", PANE_FORMAT)
+    if not tmux_ok(result):
+        return []
+    return [
+        p for p in parse_panes(result.stdout)
+        if p.session_name == BG_SESSION
+        or not window_id or p.window_id == window_id
+    ]
 
 
 def pane_map(panes: list[PaneInfo]) -> dict[str, str]:
@@ -833,14 +863,14 @@ def panel_pane_for(pane_id: str) -> str:
 def request_new_session(pane_id: str) -> bool:
     """Ask the panel in *pane_id*'s window to start a session in its project.
 
-    Sending the panel's own `n` key keeps one spawn/present path and does not
+    Sending the panel's no-picker `N` key keeps one spawn/present path and does not
     move focus, so the keyboard stays in the viewer.
     """
     panel_id = panel_pane_for(pane_id)
     if not panel_id:
         tmux("display-message", "sassy-code: no control panel in this window")
         return False
-    return tmux_ok(tmux("send-keys", "-t", panel_id, "-l", "n"))
+    return tmux_ok(tmux("send-keys", "-t", panel_id, "-l", NEW_NO_PICKER_KEY))
 
 
 def kill_pane(pane_id: str) -> None:
@@ -904,7 +934,7 @@ def _bg_window_name(tag: str = "") -> str:
     return f"bg-{cleaned}" if cleaned else f"bg-{int(time.time() * 1000)}"
 
 
-def _spawn_bg_window(cwd: str, command: str, tag: str = "") -> str:
+def _spawn_bg_window(cwd: str, command: str, tag: str) -> str:
     """Create one hidden single-pane window in the background session."""
     cwd = cwd or os.path.expanduser("~")
     name = _bg_window_name(tag)
@@ -920,9 +950,13 @@ def _spawn_bg_window(cwd: str, command: str, tag: str = "") -> str:
     if not tmux_ok(result) or not result.stdout.strip():
         return ""
     pane_id = result.stdout.strip().split()[0]
-    if tag:
-        set_pane_tag(pane_id, tag)
+    set_pane_tag(pane_id, tag)
     return pane_id
+
+
+def installed_harnesses() -> list[str]:
+    """Harness keys whose executable is on PATH, in `HARNESS` order."""
+    return [key for key in HARNESS_KEYS if shutil.which(key)]
 
 
 def default_harness() -> str:
@@ -934,10 +968,7 @@ def default_harness() -> str:
     value = os.environ.get("SASSY_CODE_NEW_HARNESS", "").strip().lower()
     if value in HARNESS:
         return value
-    for candidate in HARNESS_KEYS:
-        if shutil.which(candidate):
-            return candidate
-    return DEFAULT_HARNESS
+    return next(iter(installed_harnesses()), DEFAULT_HARNESS)
 
 
 def session_invoke(s: Session) -> str:
@@ -962,11 +993,6 @@ def spawn_new_session_pane(
     else:
         invoke = f"pi --session-id {shlex.quote(session_id)}"
     return _spawn_bg_window(cwd, _pane_command(invoke), tag=session_id)
-
-
-def spawn_placeholder(cwd: str | None = None) -> str:
-    cwd = cwd or os.path.expanduser("~")
-    return _spawn_bg_window(cwd, f"exec {shlex.quote(_shell())}")
 
 
 def session_index(groups: list[Group]) -> dict[str, Session]:
@@ -1238,9 +1264,29 @@ def reap_hidden(
             reap_state.pop(pane_id, None)
 
 
+def state_path(name: str) -> str:
+    return os.path.join(STATE_DIR, name)
+
+
+def ensure_state_dir() -> None:
+    os.makedirs(STATE_DIR, exist_ok=True)
+
+
+def migrate_state() -> None:
+    """Move the old current-session file into the state dir, once. New wins."""
+    new = state_path(CURRENT_STATE)
+    if os.path.exists(new) or not os.path.exists(LEGACY_STATE_FILE):
+        return
+    try:
+        ensure_state_dir()
+        shutil.move(LEGACY_STATE_FILE, new)
+    except OSError:
+        pass
+
+
 def _read_state() -> str:
     try:
-        with open(STATE_FILE) as f:
+        with open(state_path(CURRENT_STATE)) as f:
             return f.read().strip()
     except OSError:
         return ""
@@ -1248,10 +1294,483 @@ def _read_state() -> str:
 
 def _write_state(session_id: str) -> None:
     try:
-        with open(STATE_FILE, "w") as f:
+        ensure_state_dir()
+        with open(state_path(CURRENT_STATE), "w") as f:
             f.write(session_id)
     except OSError:
         pass
+
+
+class GoalError(Exception):
+    """A goal action refused; the message is shown in the footer."""
+
+
+GOALS_UNREADABLE = "goals.json is unreadable: goals hidden, edits refused"
+GOAL_HINTS = (
+    "n. it's not going to plan itself.",
+    "press n. or keep admiring the empty folder.",
+    "a goal with zero sessions. bold strategy. n.",
+    "n starts a session. revolutionary, I know.",
+    "empty again. n would fix that.",
+    "still nothing here. n is right there.",
+    "ambition without sessions. try n.",
+    "this goal is vibes only. n adds substance.",
+    "zero sessions, infinite potential. n.",
+    "a folder of dreams. press n to make it work.",
+    "n. the goal won't start itself either.",
+    "bold of you to plan this much and press n so little.",
+)
+# (stamp, goals by cwd, unreadable) of the last goals.json read.
+_goals_cache: tuple | None = None
+
+
+def _valid_goals(data) -> bool:
+    if not isinstance(data, dict) or data.get("version") != 1:
+        return False
+    projects = data.get("projects")
+    if not isinstance(projects, dict):
+        return False
+    for goals in projects.values():
+        if not isinstance(goals, list):
+            return False
+        for g in goals:
+            if not (
+                isinstance(g, dict)
+                and isinstance(g.get("id"), str)
+                and isinstance(g.get("name"), str)
+                and isinstance(g.get("sessions", []), list)
+            ):
+                return False
+    return True
+
+
+def read_goals_file() -> dict:
+    """Parse goals.json. Missing means no goals; unreadable raises GoalError."""
+    try:
+        with open(state_path(GOALS_STATE)) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {"version": 1, "projects": {}}
+    except (OSError, ValueError):
+        raise GoalError(GOALS_UNREADABLE)
+    if not _valid_goals(data):
+        raise GoalError(GOALS_UNREADABLE)
+    return data
+
+
+def _goal_from_record(r: dict) -> Goal:
+    created = r.get("created")
+    return Goal(
+        id=r["id"],
+        name=r["name"],
+        created=float(created) if isinstance(created, (int, float)) else 0.0,
+        done=bool(r.get("done")),
+        collapsed=bool(r.get("collapsed")),
+        sessions=[i for i in r.get("sessions", []) if isinstance(i, str)],
+    )
+
+
+def load_goals() -> tuple[dict[str, list[Goal]], bool]:
+    """Goals by project cwd plus an unreadable flag, cached by mtime and size."""
+    global _goals_cache
+    try:
+        st = os.stat(state_path(GOALS_STATE))
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    if _goals_cache is not None and _goals_cache[0] == stamp:
+        return _goals_cache[1], _goals_cache[2]
+    try:
+        data = read_goals_file()
+        goals = {
+            cwd: [_goal_from_record(r) for r in records]
+            for cwd, records in data["projects"].items()
+        }
+        unreadable = False
+    except GoalError:
+        goals, unreadable = {}, True
+    _goals_cache = (stamp, goals, unreadable)
+    return goals, unreadable
+
+
+def attach_goals(groups: list[Group]) -> bool:
+    """Set each group's goals from goals.json; True when the file is unreadable.
+
+    A project with no sessions has no group, so its goals stay in the file
+    unseen.
+    """
+    goals, unreadable = load_goals()
+    for g in groups:
+        g.goals = inherit_goal_members(g, goals.get(g.cwd, []))
+    return unreadable
+
+
+def inherit_goal_members(g: Group, goals: list[Goal]) -> list[Goal]:
+    """Goals with Pi successors added to their parent's goal (D17).
+
+    Derived on every attach, never written; the cached Goal objects are copied,
+    not mutated, so deleting a goal drops its derived members with it.
+    """
+    if not goals:
+        return goals
+    owner: dict[str, int] = {}
+    for n, gl in enumerate(goals):
+        for sid in gl.sessions:
+            owner.setdefault(sid, n)
+    by_path = {s.path: s for s in g.sessions if s.path}
+    inherited: dict[int, list[str]] = {}
+    for s in g.sessions:
+        if s.id in owner:
+            continue
+        current, seen = s, {s.id}
+        while True:
+            parent = by_path.get(current.parent_path)
+            if parent is None or parent.id in seen:
+                break
+            if parent.id in owner:
+                inherited.setdefault(owner[parent.id], []).append(s.id)
+                break
+            seen.add(parent.id)
+            current = parent
+    if not inherited:
+        return goals
+    return [
+        replace(gl, sessions=gl.sessions + inherited[n]) if n in inherited else gl
+        for n, gl in enumerate(goals)
+    ]
+
+
+def mutate_goals(apply):
+    """Re-read goals.json, let *apply* edit it, write atomically.
+
+    A corrupt file is never overwritten. *apply* may raise GoalError to abort
+    before anything is written. Returns whatever *apply* returns.
+    """
+    data = read_goals_file()
+    result = apply(data)
+    ensure_state_dir()
+    fd, tmp = tempfile.mkstemp(dir=STATE_DIR, prefix=".goals-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, state_path(GOALS_STATE))
+        return result
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _clean_goal_name(name: str) -> str:
+    name = " ".join(name.split())
+    if not name:
+        raise GoalError("goal needs a name")
+    return name
+
+
+def create_goal(cwd: str, name: str) -> Goal:
+    name = _clean_goal_name(name)
+    record = {
+        "id": str(uuid.uuid4()),
+        "name": name,
+        "created": time.time(),
+        "done": False,
+        "collapsed": False,
+        "sessions": [],
+    }
+
+    def apply(data: dict) -> None:
+        goals = data["projects"].setdefault(cwd, [])
+        _check_name_free(data, cwd, name)
+        goals.append(record)
+
+    mutate_goals(apply)
+    return _goal_from_record(record)
+
+
+def _find_goal(data: dict, cwd: str, goal_id: str) -> dict:
+    for g in data["projects"].get(cwd, []):
+        if g["id"] == goal_id:
+            return g
+    raise GoalError("goal no longer exists")
+
+
+def set_goal_collapsed(cwd: str, goal_id: str, collapsed: bool) -> None:
+    def apply(data: dict) -> None:
+        _find_goal(data, cwd, goal_id)["collapsed"] = collapsed
+
+    mutate_goals(apply)
+
+
+def file_session_in_goal(cwd: str, goal_id: str, session_id: str) -> None:
+    """Record *session_id* in a goal, reopening it when it was done (D19).
+
+    Filed before the session file exists; ids with no file stay hidden (A4).
+    """
+    def apply(data: dict) -> None:
+        g = _find_goal(data, cwd, goal_id)
+        sessions = g.setdefault("sessions", [])
+        if session_id not in sessions:
+            sessions.append(session_id)
+        g["done"] = False
+        g["collapsed"] = False
+
+    mutate_goals(apply)
+
+
+def goal_name_taken(data: dict, cwd: str, name: str, skip_id: str = "") -> bool:
+    return any(
+        g["name"].lower() == name.lower() and g["id"] != skip_id
+        for g in data["projects"].get(cwd, [])
+    )
+
+
+def _check_name_free(data: dict, cwd: str, name: str, skip_id: str = "") -> None:
+    if goal_name_taken(data, cwd, name, skip_id):
+        raise GoalError(f"goal '{name}' already exists here")
+
+
+def rename_goal(cwd: str, goal_id: str, name: str) -> str:
+    """Rename a goal; returns the stored name (A1, A2)."""
+    name = _clean_goal_name(name)
+
+    def apply(data: dict) -> None:
+        record = _find_goal(data, cwd, goal_id)
+        _check_name_free(data, cwd, name, goal_id)
+        record["name"] = name
+
+    mutate_goals(apply)
+    return name
+
+
+def toggle_goal_done(cwd: str, goal_id: str) -> bool:
+    """Flip a goal's done flag; returns the new value (D14).
+
+    Marking done collapses it; reopening expands it (D32).
+    """
+    def apply(data: dict) -> bool:
+        record = _find_goal(data, cwd, goal_id)
+        record["done"] = not record.get("done")
+        if record["done"]:
+            record["collapsed"] = True
+        else:
+            record["collapsed"] = False
+        return record["done"]
+
+    return mutate_goals(apply)
+
+
+def delete_goal(cwd: str, goal_id: str) -> None:
+    """Remove a goal record only; its sessions become loose (D8)."""
+
+    def apply(data: dict) -> None:
+        record = _find_goal(data, cwd, goal_id)
+        data["projects"][cwd].remove(record)
+
+    mutate_goals(apply)
+
+
+def goal_of_session(g: Group, session_id: str) -> Goal | None:
+    return next((gl for gl in g.goals if session_id in gl.sessions), None)
+
+
+def new_session_plan(row: tuple) -> tuple[str | None, str | None]:
+    """(harness hint, goal id) for `n` on *row*.
+
+    A goal row, or a session inside a goal, files the new session in that goal
+    (D18); anything else stays loose. A session row reuses its own harness; a
+    goal row uses its newest member's, then the project's newest session.
+    """
+    kind, g, item = row
+    if kind == "goal_more":
+        kind, item = "goal", item[0]
+    if kind == "session":
+        goal = goal_of_session(g, item.id)
+        return item.harness, goal.id if goal else None
+    newest = g.sessions[0].harness if g.sessions else None
+    if kind == "goal":
+        members = goal_members(g, item)
+        return (members[0].harness if members else newest), item.id
+    return newest, None
+
+
+def should_pick_harness(row: tuple | None, installed: list[str]) -> bool:
+    """Whether `n` on *row* asks which harness (D26/D27).
+
+    Only a project heading or a goal row asks, and only when there is a real
+    choice. `goal_more` and session rows use the inferred harness directly.
+    """
+    return bool(row) and row[0] in ("group", "goal") and len(installed) > 1
+
+
+def picker_start(hint: str | None, installed: list[str]) -> int:
+    """Index of the preselected harness: the inferred one, else the default."""
+    if hint in installed:
+        return installed.index(hint)
+    default = default_harness()
+    return installed.index(default) if default in installed else 0
+
+
+def picker_key(index: int, count: int, ch) -> tuple[int, str]:
+    """Apply one key to the picker: (new index, "" | "pick" | "cancel")."""
+    if ch in (curses.KEY_UP, ord("k")):
+        return max(0, index - 1), ""
+    if ch in (curses.KEY_DOWN, ord("j")):
+        return min(count - 1, index + 1), ""
+    if ch in (curses.KEY_ENTER, 10, 13):
+        return index, "pick"
+    if ch in (27, ord("q")):
+        return index, "cancel"
+    if ord("1") <= ch <= ord("9"):
+        n = ch - ord("1")
+        if n < count:
+            return n, "pick"
+    return index, ""
+
+
+def harness_picker(stdscr, installed: list[str], index: int) -> str | None:
+    """Boxed harness list over the panel; the chosen key, or None on cancel.
+
+    If the box cannot be drawn (tiny terminal), starts with the preselected
+    harness rather than failing. A Ctrl-C propagates so the caller detaches.
+    """
+    lines = [
+        f" {n} {HARNESS[k]['glyph']} {HARNESS[k]['label']}"
+        for n, k in enumerate(installed, 1)
+    ]
+    try:
+        while True:
+            h, w = stdscr.getmaxyx()  # re-read: the terminal may resize
+            rows = min(len(lines), h - 2)
+            width = min(w, max(display_width(t) for t in lines) + 3)
+            if rows < 1 or width < 6:
+                return installed[index]
+            top = max(0, min(index - rows // 2, len(lines) - rows))
+            try:
+                win = curses.newwin(rows + 2, width, max(0, (h - rows - 2) // 2),
+                                    max(0, (w - width) // 2))
+                # Read keys from the box itself: stdscr.getch() would
+                # implicitly repaint the stale panel over it after a resize.
+                win.keypad(True)
+                win.timeout(2000)
+                win.erase()
+                win.box()
+                win.addnstr(0, 1, "new", width - 2)
+                for i in range(rows):
+                    attr = curses.A_REVERSE if top + i == index else 0
+                    win.addnstr(i + 1, 1, fit_cols(lines[top + i], width - 2),
+                                width - 2, attr)
+                win.refresh()
+            except curses.error:
+                return installed[index]
+            ch = win.getch()
+            if ch in (-1, curses.KEY_RESIZE):
+                continue  # a refresh tick or resize: redraw the box
+            index, action = picker_key(index, len(installed), ch)
+            if action == "pick":
+                return installed[index]
+            if action == "cancel":
+                return None
+    finally:
+        try:
+            stdscr.touchwin()
+            stdscr.refresh()
+        except curses.error:
+            pass
+
+
+def goal_hint(g: Group, goal: Goal) -> str:
+    """A sarcastic nudge, distinct among the project's empty goals.
+
+    Empty goals are taken oldest first; each starts at crc32(id) and walks
+    forward to the first line no older empty goal holds, so a goal keeps its
+    line until an older empty goal gains a session. With more empty goals than
+    lines the walk wraps and lines repeat.
+    """
+    n = len(GOAL_HINTS)
+    taken: set[int] = set()
+    empties = sorted(
+        (x for x in g.goals if not goal_members(g, x)),
+        key=lambda x: (x.created, x.id),
+    )
+    for x in empties:
+        i = zlib.crc32(x.id.encode()) % n
+        if len(taken) < n:
+            while i in taken:
+                i = (i + 1) % n
+        if x.id == goal.id:
+            return GOAL_HINTS[i]
+        taken.add(i)
+    return GOAL_HINTS[zlib.crc32(goal.id.encode()) % n]
+
+
+def run_command(
+    text: str, cwd: str | None, current: Goal | None = None
+) -> tuple[str, Goal | None]:
+    """Run a `:` command line; returns (footer message, goal to select).
+
+    *current* is the highlighted goal, the target of `goal:rename`.
+    """
+    parts = text.strip().lstrip(":").split(None, 1)
+    if not parts:
+        return "", None
+    command, arg = parts[0], parts[1] if len(parts) > 1 else ""
+    if command == "goal:rename":
+        if cwd is None or current is None:
+            return "highlight a goal to rename it", None
+        try:
+            name = rename_goal(cwd, current.id, arg)
+        except (GoalError, OSError) as e:
+            return _goal_error_message(e), None
+        return f"renamed goal to '{name}'", replace(current, name=name)
+    if command != "goal:create":
+        return f"unknown command: {command}", None
+    if cwd is None:
+        return "no project to put a goal in", None
+    try:
+        goal = create_goal(cwd, arg)
+    except (GoalError, OSError) as e:
+        return _goal_error_message(e), None
+    return f"created goal '{goal.name}'", goal
+
+
+def goal_members(g: Group, goal: Goal) -> list[Session]:
+    """The goal's sessions that have a file, newest first (A4: others hidden)."""
+    by_id = {s.id: s for s in g.sessions}
+    found = [by_id[i] for i in dict.fromkeys(goal.sessions) if i in by_id]
+    return sorted(found, key=lambda s: s.last_ts, reverse=True)
+
+
+def goal_member_ids(g: Group) -> set[str]:
+    """Ids of every session claimed by one of the group's goals."""
+    return {i for gl in g.goals for i in gl.sessions}
+
+
+def goal_age_ts(
+    g: Group, goal: Goal, members: list[Session] | None = None
+) -> float:
+    """Newest member's activity, else the goal's creation time."""
+    if members is None:
+        members = goal_members(g, goal)
+    return members[0].last_ts if members else goal.created
+
+
+def recency_top(
+    sessions: list[Session], goal_rows: list[tuple[Goal, list[Session], float]]
+) -> list[tuple]:
+    """Loose sessions and goals interleaved by recency, newest first.
+
+    A goal ranks by its newest session, else by creation. Entries are
+    (timestamp, kind, item, goal members or None).
+    """
+    top = [(s.last_ts, "session", s, None) for s in sessions]
+    top += [(age, "goal", gl, members) for gl, members, age in goal_rows]
+    # Done goals follow every active item (D15); recency orders each band.
+    top.sort(key=lambda t: (t[1] == "goal" and t[2].done, -t[0]))
+    return top
 
 
 def _present_pane(
@@ -1350,8 +1869,14 @@ def new_session(
     groups: list[Group] | None = None,
     reap_state: dict[str, float] | None = None,
     harness: str | None = None,
+    goal_id: str | None = None,
 ) -> str | None:
-    """Start a fresh agent in the viewer via the background swap path."""
+    """Start a fresh agent in the viewer via the background swap path.
+
+    With *goal_id* the new id is filed in that goal before spawning. If the
+    goal store refuses, the session still starts loose and the reason is
+    returned as the footer warning.
+    """
     groups = load_groups() if groups is None else groups
     reap_state = {} if reap_state is None else reap_state
     harness = harness if harness in HARNESS else default_harness()
@@ -1361,6 +1886,15 @@ def new_session(
     if not viewer:
         return "No session viewer pane found"
     session_id = str(uuid.uuid4())
+    goal_warning = None
+    if goal_id:
+        outside = "; started outside the goal"
+        try:
+            file_session_in_goal(cwd, goal_id, session_id)
+        except GoalError as e:
+            goal_warning = f"{e}{outside}"
+        except OSError as e:
+            goal_warning = f"could not save goal: {e.strerror or e}{outside}"
     new_pane = spawn_new_session_pane(cwd, session_id, harness)
     if not new_pane:
         return "Could not start a new session"
@@ -1369,51 +1903,39 @@ def new_session(
         kill_pane(new_pane)
         return warning
     _write_state(session_id)
-    return None
+    return goal_warning
 
 
-def preserve_active_on_quit(
-    groups: list[Group] | None = None,
-    preferred: str = "",
-    reap_state: dict[str, float] | None = None,
-) -> None:
-    """Move a live viewer session into the background before quitting.
+DETACH_FAILED = " Could not detach from tmux "
 
-    The panel's cached groups can be seconds old, so the decision is made from
-    a fresh process table and session store. A live agent is authoritative: it
-    is preserved even if the last recorded assistant message looks complete.
+
+def detach_panel() -> str:
+    """Detach every client attached to the panel's own tmux session.
+
+    The one quit path. Nothing is killed or moved: the session, panel, viewer
+    and agents keep running and `sassy-code` reattaches. Only the session the
+    panel lives in is touched. Returns "" on success or when there is nothing
+    to detach (no client attached), else a footer message (also when the
+    panel's pane or tmux could not be queried). Callers handle "outside tmux"
+    themselves, from $TMUX.
     """
-    # Ignore the caller's cached groups; they may predate the current turn.
-    groups = load_groups()
-    reap_state = {} if reap_state is None else reap_state
-    procs = process_table()
-    panel_id, panes, viewer = visible_layout(groups, preferred, procs)
-    if not panel_id or not panes or not viewer:
-        return
-    pane = next((p for p in panes if p.id == viewer), None)
+    pane = panel_pane_id()
     if not pane:
-        return
-
-    # Completed sessions with no live agent do not need preserving. Conversely,
-    # a live agent must survive even when the JSONL still shows a terminal stop.
-    if not pane_has_agent(pane, procs):
-        return
-
-    sessions = session_index(groups)
-    running_id = pane_running_session(pane, procs)
-    s = find_session(sessions, pane.tag or running_id or "")
-    session_id = pane.tag or running_id or (s.id if s else "")
-    if session_id:
-        set_pane_tag(viewer, session_id)
-    placeholder = spawn_placeholder(s.cwd if s else None)
-    if not placeholder:
-        return
-    if not swap_panes(placeholder, viewer):
-        kill_pane(placeholder)
-        return
-    # The working pane is now hidden in the background window; the temporary
-    # placeholder shell takes its place in the visible window.
-    focus(placeholder)
+        return DETACH_FAILED
+    res = tmux("display-message", "-p", "-t", pane, "#{session_name}")
+    if not tmux_ok(res):
+        return DETACH_FAILED
+    if not res.stdout.strip():
+        return ""
+    target = f"={res.stdout.strip().splitlines()[0]}"
+    res = tmux("list-clients", "-t", target, "-F", "#{client_name}")
+    if not tmux_ok(res):
+        return DETACH_FAILED
+    if not res.stdout.strip():
+        return ""
+    if tmux_ok(tmux("detach-client", "-s", target)):
+        return ""
+    return DETACH_FAILED
 
 
 def _store_files(directory: str, harness: str) -> list[tuple[str, str]]:
@@ -1494,6 +2016,7 @@ def load_groups() -> list[Group]:
     for g in result:
         g.sessions.sort(key=lambda s: s.last_ts, reverse=True)
     result.sort(key=lambda g: g.last_ts, reverse=True)
+    attach_goals(result)
     return result
 
 
@@ -1577,11 +2100,16 @@ def rows_for(
     expanded: set[str] | None = None,
     limit: int = SESSION_LIMIT,
 ):
-    """Yield (kind, group, payload) rows honoring filter, collapse and limit.
+    """Yield (kind, group, payload) rows honoring filter, collapse and limits.
 
-    A project shows at most *limit* sessions, plus a `more` row to reveal the
-    rest. Live sessions stay visible even when they fall past the limit. A
-    filter shows every match, and a collapsed project shows only its heading.
+    A project shows at most *limit* top-level items (a loose session, or a goal
+    counting as one), plus a `more` row (payload: hidden item count) to reveal
+    the rest. An expanded goal lists its sessions, at most GOAL_SESSION_LIMIT,
+    plus a `goal_more` row (payload: (goal, hidden session count)). Both `more`
+    rows stay once expanded so the same row collapses the list again. Running
+    sessions are never hidden at either level, and a goal holding one counts as
+    running. A filter shows every match, and a collapsed project or goal shows
+    only its heading.
     """
     collapsed = collapsed or set()
     expanded = expanded or set()
@@ -1597,37 +2125,75 @@ def rows_for(
             or flt_l in s.harness
             or flt_l in HARNESS[s.harness]["label"].lower()
         ]
+        match_ids = {s.id for s in match_sessions}
+        member_ids = goal_member_ids(g)
+        loose = [s for s in match_sessions if s.id not in member_ids]
+        # A goal shows when unfiltered, when its name matches (with all its
+        # sessions), or when one of its sessions matches (only those).
+        goal_rows = []
+        for gl in g.goals:
+            members = goal_members(g, gl)
+            age = goal_age_ts(g, gl, members)
+            if flt and flt_l not in gl.name.lower():
+                members = [s for s in members if s.id in match_ids]
+                if not members:
+                    continue
+            goal_rows.append((gl, members, age))
         gm = not flt or flt_l in g.cwd.lower()
-        if not match_sessions and not gm:
+        if not match_sessions and not gm and not goal_rows:
             continue
         yield ("group", g, None)
         # A filter always expands groups so matches stay visible.
         if g.cwd in collapsed and not flt:
             continue
-        limited = (
-            not flt and g.cwd not in expanded and len(match_sessions) > limit
+        top = recency_top(loose, goal_rows)
+        shown = top if flt or g.cwd in expanded else limit_keep(
+            top, limit, entry_running
         )
-        if limited:
-            shown = match_sessions[:limit]
-            shown_ids = {s.id for s in shown}
-            live = [
-                s
-                for s in match_sessions[limit:]
-                if s.status == "running" and s.id not in shown_ids
-            ]
-            if live:
-                shown = sorted(
-                    shown + live, key=lambda s: s.last_ts, reverse=True
-                )
-            hidden = len(match_sessions) - len(shown)
-        else:
-            shown = match_sessions
-            hidden = 0
-        for s in shown:
-            yield ("session", g, s)
-        if not flt and len(match_sessions) > limit:
+        hidden = len(top) - len(shown)
+        for _, kind, item, members in shown:
+            if kind == "session":
+                yield ("session", g, item)
+                continue
+            yield ("goal", g, item)
+            if goal_collapsed(item, flt):
+                continue
+            visible = members if flt or item.id in expanded else limit_keep(
+                members, GOAL_SESSION_LIMIT, is_running
+            )
+            ghidden = len(members) - len(visible)
+            for s in visible:
+                yield ("session", g, s)
+            if not flt and len(members) > GOAL_SESSION_LIMIT:
+                # Kept when expanded, so the same row collapses it again.
+                yield ("goal_more", g, (item, ghidden))
+        if not flt and len(top) > limit:
             # Kept when expanded, so the same row collapses the list again.
             yield ("more", g, hidden)
+
+
+def is_running(s: Session) -> bool:
+    return s.status == "running"
+
+
+def entry_running(entry: tuple) -> bool:
+    """Whether a recency_top entry is, or holds, a running session."""
+    _, kind, item, members = entry
+    return is_running(item) if kind == "session" else any(map(is_running, members))
+
+
+def limit_keep(items: list, limit: int, running) -> list:
+    """The first *limit* items plus any later one *running* says to keep."""
+    return [x for i, x in enumerate(items) if i < limit or running(x)]
+
+
+def more_key(kind: str, g: Group, s) -> str:
+    """Expanded-set key of a `more` (project cwd) or `goal_more` (goal id) row."""
+    return g.cwd if kind == "more" else s[0].id
+
+
+def goal_collapsed(goal: Goal, flt: str) -> bool:
+    return goal.collapsed and not flt
 
 
 def group_collapsed(g: Group, collapsed: set[str], flt: str) -> bool:
@@ -1639,9 +2205,29 @@ FOOTER_ITEMS = (
     "⏎ present",
     "n new",
     "/ filter",
+    ": cmd",
     "r reload",
     "q quit",
 )
+
+
+GOAL_FOOTER_ITEMS = (
+    "⏎ toggle",
+    "n new",
+    "R rename",
+    "x done",
+    "D delete",
+)
+
+
+def footer_items(row: tuple | None) -> tuple[str, ...]:
+    """Footer hints for the highlighted row's kind."""
+    kind = row[0] if row else None
+    if kind == "goal":
+        return GOAL_FOOTER_ITEMS
+    if kind == "group":
+        return tuple("⏎ toggle" if i == "⏎ present" else i for i in FOOTER_ITEMS)
+    return FOOTER_ITEMS
 
 
 def footer_lines(items, w: int) -> list[str]:
@@ -1668,6 +2254,10 @@ def row_key(item):
         return ("session", s.id, g.cwd)
     if kind == "more":
         return ("more", g.cwd)
+    if kind == "goal":
+        return ("goal", s.id, g.cwd)
+    if kind == "goal_more":
+        return ("goal_more", s[0].id, g.cwd)
     return ("group", g.cwd)
 
 
@@ -1678,15 +2268,25 @@ def cursor_for_key(rows, key) -> int:
     for i, item in enumerate(rows):
         if row_key(item) == key:
             return i
-    if key[0] in ("session", "more"):
-        cwd = key[1] if key[0] == "more" else key[2]
-        # A session pushed behind the per-project limit lives under "more".
-        for i, item in enumerate(rows):
-            if item[0] == "more" and item[1].cwd == cwd:
-                return i
-        for i, item in enumerate(rows):
-            if item[0] == "group" and item[1].cwd == cwd:
-                return i
+    if key[0] not in ("session", "more", "goal", "goal_more"):
+        return 0
+    cwd = key[1] if key[0] == "more" else key[2]
+    if key[0] == "session":
+        # Behind its goal's "more" row, else collapsed away with the goal.
+        for kind in ("goal_more", "goal"):
+            for i, item in enumerate(rows):
+                if item[1].cwd != cwd or item[0] != kind:
+                    continue
+                goal = item[2][0] if kind == "goal_more" else item[2]
+                if key[1] in goal.sessions:
+                    return i
+    # A session pushed behind the per-project limit lives under "more".
+    for i, item in enumerate(rows):
+        if item[0] == "more" and item[1].cwd == cwd:
+            return i
+    for i, item in enumerate(rows):
+        if item[0] == "group" and item[1].cwd == cwd:
+            return i
     return 0
 
 
@@ -1764,6 +2364,7 @@ def build_lines(
     lines = []
     starts: dict[int, int] = {}
     heights: dict[int, int] = {}
+    nested_ids: dict[str, set[str]] = {}
     for idx, (kind, g, s) in enumerate(items):
         if kind == "group" and idx > 0:
             lines.append(("", "gap", -1))
@@ -1775,6 +2376,40 @@ def build_lines(
             if len(label) > w - 1:
                 label = label[: max(1, w - 2)] + "…"
             lines.append((label, "group", idx))
+        elif kind == "goal":
+            closed = goal_collapsed(s, flt)
+            arrow = "▸" if closed else "▾"
+            members = goal_members(g, s)
+            count = len(members)
+            suffix = rel_time(goal_age_ts(g, s, members))
+            live = closed and any(map(is_running, members))
+            # Rolled-up running and done marks sit right after the arrow.
+            marks = " ".join(
+                m for m, on in ((STATUS["running"][0], live), ("✓", s.done)) if on
+            )
+            # The arrow sits in the harness-glyph column of a loose session
+            # (` {sym} {glyph} `), so the name lines up with its title.
+            prefix = f"   {arrow} {marks} " if marks else f"   {arrow} "
+            tail = f"  ({count})"
+            tw = max(
+                4,
+                w - display_width(prefix) - display_width(tail)
+                - display_width(suffix) - 2,
+            )
+            body = prefix + truncate_cols(s.name, tw) + tail
+            pad = max(1, w - display_width(body) - display_width(suffix) - 1)
+            lines.append((body + " " * pad + suffix, "goal", idx))
+            if count == 0 and not closed:
+                hint = truncate_cols(goal_hint(g, s), max(4, w - 6))
+                lines.append(("     " + hint, "hint", -1))
+        elif kind == "goal_more":
+            goal, hidden = s
+            text = (
+                "       … show fewer"
+                if goal.id in expanded
+                else f"       … {hidden} more"
+            )
+            lines.append((text, "more", idx))
         elif kind == "more":
             text = (
                 "   … show fewer"
@@ -1786,7 +2421,10 @@ def build_lines(
             sym, _ = STATUS[s.status]
             suffix = rel_time(s.last_ts)
             glyph = HARNESS[s.harness]["glyph"]
-            prefix = f" {sym} {glyph} "
+            if g.cwd not in nested_ids:
+                nested_ids[g.cwd] = goal_member_ids(g)
+            nested = s.id in nested_ids[g.cwd]
+            prefix = f"{'    ' if nested else ' '}{sym} {glyph} "
             tw = max(4, w - display_width(prefix) - display_width(suffix) - 2)
             title = truncate_cols(re.sub(r"\s+", " ", s.title), tw)
             body = prefix + title
@@ -1797,23 +2435,31 @@ def build_lines(
 
 
 def draw(
-    stdscr, groups, flt, cursor, offset, collapsed, message="", expanded=None
+    stdscr, groups, flt, cursor, offset, collapsed, message="", expanded=None,
+    notice="",
 ):
     stdscr.erase()
     h, w = stdscr.getmaxyx()
 
     def put(y: int, text: str, attr: int, pad: bool = True) -> None:
+        if not 0 <= y < h or w < 2:
+            return
         text = (fit_cols if pad else truncate_cols)(text, w - 1)
-        stdscr.addnstr(y, 0, text, len(text), attr)
+        try:
+            stdscr.addnstr(y, 0, text, len(text), attr)
+        except curses.error:
+            pass  # a tiny or mid-resize terminal must never kill the panel
 
     title = f" Sassy Code — {sum(len(g.sessions) for g in groups)} sessions "
     put(0, title, curses.A_REVERSE | curses.A_BOLD)
     if flt:
         put(1, f" filter: {flt}", curses.A_DIM, pad=False)
 
-    keys = footer_lines(FOOTER_ITEMS, w)
-    footer_h = len(keys)
     items = list(rows_for(groups, flt, collapsed, expanded))
+    keys = footer_lines(footer_items(highlighted_row(items, cursor)), w)
+    if notice:
+        keys = footer_lines([notice.strip()], w) + keys
+    footer_h = len(keys)
     list_top = 2 if flt else 1
     avail = max(1, h - list_top - footer_h)
     if items:
@@ -1844,7 +2490,11 @@ def draw(
             continue
         sel = idx == cursor
         attr = curses.A_REVERSE if sel else curses.A_NORMAL
-        if kind == "group":
+        if kind == "hint":
+            put(i + list_top, text, curses.A_DIM)
+        elif kind == "goal":
+            put(i + list_top, text, attr | curses.A_BOLD)
+        elif kind == "group":
             put(i + list_top, text,
                 attr | curses.A_BOLD | (0 if sel else curses.color_pair(5)))
         elif kind == "more":
@@ -1860,26 +2510,187 @@ def draw(
         text = footer[i] if i < len(footer) else ""
         put(h - footer_h + i, text,
             curses.A_REVERSE | (curses.A_BOLD if message else 0))
-    stdscr.refresh()
+    try:
+        stdscr.refresh()
+    except curses.error:
+        pass
     return cursor, offset
 
 
-def prompt_filter(stdscr, current):
-    h, w = stdscr.getmaxyx()
-    curses.echo()
+def apply_edit_key(text: str, ch) -> tuple[str, str | None]:
+    """Apply one key to a prompt line; returns (text, "submit"/"cancel"/None)."""
+    if ch in (curses.KEY_ENTER, 10, 13, "\n", "\r"):
+        return text, "submit"
+    if ch in (27, "\x1b"):
+        return text, "cancel"
+    if ch in (curses.KEY_BACKSPACE, 127, 8, "\x7f", "\b"):
+        return text[:-1], None
+    if ch in (21, "\x15"):
+        return "", None
+    # Cf (ZWJ, variation selectors) keeps emoji sequences intact.
+    if isinstance(ch, str) and (
+        ch.isprintable() or unicodedata.category(ch) == "Cf"
+    ):
+        return text + ch, None
+    return text, None
+
+
+def tail_by_width(text: str, room: int) -> str:
+    """The right end of *text* that fits in *room* display columns."""
+    shown = text
+    while shown and display_width(shown) > room:
+        shown = shown[1:]
+    return shown
+
+
+def prompt_line(stdscr, label: str, initial: str = ""):
+    """Edit one line at the bottom; returns the text, or None on Esc."""
     curses.curs_set(1)
-    stdscr.addnstr(h - 1, 0, " filter: ", w - 1, curses.A_REVERSE)
-    stdscr.move(h - 1, 9)
+    text = initial
     try:
-        raw = stdscr.getstr(h - 1, 9, w - 10).decode("utf-8", "replace")
-    except Exception:
-        raw = current
-    curses.noecho()
-    curses.curs_set(0)
-    return raw
+        while True:
+            h, w = stdscr.getmaxyx()  # re-read: the terminal may resize
+            line = f" {label}"
+            room = max(1, w - 2 - display_width(line))
+            shown = tail_by_width(text, room)
+            try:
+                stdscr.addnstr(h - 1, 0, fit_cols(line + shown, w - 1), w - 1,
+                               curses.A_REVERSE)
+                stdscr.move(h - 1, min(w - 2, display_width(line + shown)))
+                stdscr.refresh()
+            except curses.error:
+                pass  # a mid-resize frame must never kill the panel
+            try:
+                ch = stdscr.get_wch()
+            except (curses.error, KeyboardInterrupt) as e:
+                if isinstance(e, KeyboardInterrupt):
+                    return None
+                continue  # timeout tick
+            if ch == curses.KEY_RESIZE:
+                continue
+            text, action = apply_edit_key(text, ch)
+            if action == "submit":
+                return text
+            if action == "cancel":
+                return None
+    finally:
+        curses.curs_set(0)
+
+
+def highlighted_row(rows: list[tuple], cursor: int) -> tuple | None:
+    """The row under the cursor, or None when the cursor is out of range."""
+    return rows[cursor] if 0 <= cursor < len(rows) else None
+
+
+def apply_command(
+    typed: str, row: tuple | None, groups: list[Group], collapsed: set[str]
+) -> tuple[str, tuple | None]:
+    """Run a `:` line against the highlighted row's project.
+
+    Returns (footer message, row key to select). A created goal un-collapses
+    its project and reloads the goals so the cursor can land on it.
+    """
+    cwd = row[1].cwd if row else None
+    current = row[2] if row and row[0] == "goal" else None
+    text, goal = run_command(typed, cwd, current)
+    message = f" {text} " if text else ""
+    if goal is None:
+        return message, None
+    collapsed.discard(cwd)
+    attach_goals(groups)
+    return message, ("goal", goal.id, cwd)
+
+
+NO_GOAL_ROW = " highlight a goal first "
+
+
+def goals_guard() -> str:
+    """A footer warning when goals.json is unreadable, else ""."""
+    try:
+        read_goals_file()
+    except GoalError as e:
+        return f" {e} "
+    return ""
+
+
+def _goal_error_message(e: Exception) -> str:
+    if isinstance(e, OSError):
+        return f"could not save goal: {e.strerror or e}"
+    return str(e)
+
+
+def _goal_row_refusal(row: tuple | None) -> str:
+    """Why a goal-only action on *row* is refused, else ""."""
+    if not row or row[0] != "goal":
+        return NO_GOAL_ROW
+    return goals_guard()
+
+
+def rename_prefill(row: tuple | None) -> tuple[str, str]:
+    """(`:` line text, footer message) for `R`; empty text means refused."""
+    refusal = _goal_row_refusal(row)
+    if refusal:
+        return "", refusal
+    return f"goal:rename {row[2].name}", ""
+
+
+def done_goal(groups: list[Group], row: tuple | None) -> tuple[str, tuple | None]:
+    """`x`: toggle the highlighted goal's done mark; (message, key to select)."""
+    if not row or row[0] != "goal":
+        return NO_GOAL_ROW, None
+    _, g, goal = row
+    try:
+        done = toggle_goal_done(g.cwd, goal.id)
+    except (GoalError, OSError) as e:
+        return f" {_goal_error_message(e)} ", None
+    attach_goals(groups)
+    state = "done" if done else "reopened"
+    return f" {state}: '{goal.name}' ", ("goal", goal.id, g.cwd)
+
+
+def delete_prompt(row: tuple | None) -> tuple[str, str]:
+    """(confirm text, refusal message) for `D`; empty confirm means refused."""
+    refusal = _goal_row_refusal(row)
+    if refusal:
+        return "", refusal
+    return f" Delete goal '{row[2].name}'? y/n ", ""
+
+
+def delete_goal_row(
+    groups: list[Group], row: tuple
+) -> tuple[str, tuple | None]:
+    """Delete the highlighted goal after a `y`; sessions become loose (D8).
+
+    Selects the newest former member, else the project heading.
+    """
+    _, g, goal = row
+    members = goal_members(g, goal)
+    try:
+        delete_goal(g.cwd, goal.id)
+    except (GoalError, OSError) as e:
+        return f" {_goal_error_message(e)} ", None
+    attach_goals(groups)
+    key = ("session", members[0].id, g.cwd) if members else ("group", g.cwd)
+    return f" deleted goal '{goal.name}' ", key
+
+
+def toggle_goal(groups: list[Group], g: Group, goal: Goal, value: bool) -> str:
+    """Persist a goal's collapse state; returns an error message or "".
+
+    Reloads the goals either way so rows reflect the file.
+    """
+    error = ""
+    try:
+        set_goal_collapsed(g.cwd, goal.id, value)
+    except (GoalError, OSError) as e:
+        error = f" {e} "
+    attach_goals(groups)
+    return error
 
 
 def main_curses(stdscr, target: str):
+    if hasattr(curses, "set_escdelay"):
+        curses.set_escdelay(25)  # Esc cancels at once, not after ~1s
     curses.curs_set(0)
     curses.start_color()
     curses.use_default_colors()
@@ -1891,10 +2702,12 @@ def main_curses(stdscr, target: str):
     stdscr.timeout(2000)
 
     groups = load_groups()
-    set_panel_tag(panel_pane_id())
+    pane = panel_pane_id()
+    set_panel_tag(pane)
     flt = ""
     cursor = offset = 0
     selected = None  # row_key() of the highlighted row, stable across sorts
+    migrate_state()
     presented = _read_state()  # session the viewer was last asked to show
     if not presented:
         # No record yet: take the session already in the viewer as presented.
@@ -1905,124 +2718,253 @@ def main_curses(stdscr, target: str):
     reap_state: dict[str, float] = {}
     message = ""
     message_until = 0.0
-    while True:
-        if message and time.time() >= message_until:
-            message = ""
-        # Re-derive the cursor from the selected row's identity, not its old
-        # index: a session that starts working moves to the top of the list.
-        rows = list(rows_for(groups, flt, collapsed, expanded))
-        cursor = cursor_for_key(rows, selected)
-        cursor, offset = draw(
-            stdscr, groups, flt, cursor, offset, collapsed, message, expanded
-        )
-        try:
-            ch = stdscr.getch()
-        except KeyboardInterrupt:
-            preserve_active_on_quit(groups, target, reap_state)
-            break
-        if ch == -1:
-            groups = load_groups()
-            panes, viewer = refresh_hidden(groups, reap_state, target)
-            # The highlight is whatever row the cursor is on, even before the
-            # first key press; `selected` is only filled in below a key event.
-            highlight = (
-                row_key(rows[cursor])
-                if rows and 0 <= cursor < len(rows)
-                else selected
-            )
-            before = presented
-            highlight, presented = follow_viewer_switch(
-                highlight, presented, panes, groups, viewer
-            )
-            selected = highlight
-            if presented != before:
-                _write_state(presented)
-            continue
-        rows = list(rows_for(groups, flt, collapsed, expanded))
-        if ch in (curses.KEY_UP, ord("k")):
-            cursor = max(0, cursor - 1)
-        elif ch in (curses.KEY_DOWN, ord("j")):
-            cursor = min(len(rows) - 1, cursor + 1)
-        elif ch in (ord("g"), curses.KEY_HOME):
-            cursor = 0
-        elif ch in (ord("G"), curses.KEY_END):
-            cursor = max(0, len(rows) - 1)
-        elif ch == ord("q"):
-            preserve_active_on_quit(groups, target, reap_state)
-            break
-        elif ch == ord("r"):
-            groups = load_groups()
-            refresh_hidden(groups, reap_state, target)
-            count = reload_managed_panes(groups, target)
-            if count:
-                noun = "session" if count == 1 else "sessions"
-                message = f" Reloading {count} {noun} "
-            else:
-                message = " No live sessions to reload "
+
+    def say(text: str, key=None):
+        """Show *text* in the footer for a few seconds; select *key* if given."""
+        nonlocal message, message_until, selected
+        if text:
+            message = text
             message_until = time.time() + 4
-            continue
-        elif ch == ord("/"):
-            flt = prompt_filter(stdscr, flt)
-            cursor = 0
-            selected = None
-            continue
-        elif ch == ord("n"):
-            if 0 <= cursor < len(rows):
-                kind, g, selected_session = rows[cursor]
-                # New sessions continue the habit of the project: reuse the
-                # harness of the highlighted session (or its newest sibling).
-                harness = (
-                    selected_session.harness
-                    if kind == "session" and selected_session
-                    else (g.sessions[0].harness if g.sessions else None)
-                )
-                warning = new_session(
-                    target, g.cwd, groups, reap_state, harness
-                )
-                if warning:
-                    message = f" {warning} "
-                    message_until = time.time() + 4
+        if key is not None:
+            selected = key
+
+    def command_line(row, initial: str):
+        """Prompt for a `:` line, run it, report it; returns the new key."""
+        typed = prompt_line(stdscr, ":", initial)
+        if typed is None:
+            return None
+        text, key = apply_command(typed, row, groups, collapsed)
+        say(text, key)
+        return key
+
+    def quit_keys() -> bool:
+        """Every quit key lands here: detach, and the panel keeps running.
+
+        Returns True when the loop should end: outside tmux there is no
+        client to detach, so q and Ctrl-C exit the panel instead. Further
+        Ctrl-C taps while detaching are absorbed.
+        """
+        nonlocal message, message_until
+        if not os.environ.get("TMUX"):
+            return True
+        for _ in range(3):
+            try:
+                failure = detach_panel()
+            except KeyboardInterrupt:
+                continue
+            if failure:
+                message = failure
+                message_until = time.time() + 10
+            break
+        return False
+
+    def fold_goal(g, goal, value):
+        nonlocal message, message_until
+        error = toggle_goal(groups, g, goal, value)
+        if error:
+            message = error
+            message_until = time.time() + 4
+
+    while True:
+        try:
+            if message and time.time() >= message_until:
+                message = ""
+            # Re-derive the cursor from the selected row's identity, not its old
+            # index: a session that starts working moves to the top of the list.
+            unreadable = attach_goals(groups)
+            rows = list(rows_for(groups, flt, collapsed, expanded))
+            cursor = cursor_for_key(rows, selected)
+            cursor, offset = draw(
+                stdscr, groups, flt, cursor, offset, collapsed, message, expanded,
+                GOALS_UNREADABLE if unreadable else "",
+            )
+            try:
+                ch = stdscr.getch()
+            except KeyboardInterrupt:
+                if quit_keys():
+                    return
+                continue
+            if ch == -1:
                 groups = load_groups()
-                presented = _read_state()
-        elif ch in (curses.KEY_LEFT, ord("h")):
-            if 0 <= cursor < len(rows):
-                kind, g, _ = rows[cursor]
-                if kind == "group":
-                    collapsed.add(g.cwd)
-                elif kind == "more":
-                    expanded.discard(g.cwd)
-        elif ch in (curses.KEY_RIGHT, ord("l")):
-            if 0 <= cursor < len(rows):
-                kind, g, _ = rows[cursor]
-                if kind == "group":
-                    collapsed.discard(g.cwd)
-                elif kind == "more":
-                    expanded.add(g.cwd)
-        elif ch in (curses.KEY_ENTER, 10, 13):
-            if 0 <= cursor < len(rows):
-                kind, g, s = rows[cursor]
-                if kind == "group":
-                    if g.cwd in collapsed:
-                        collapsed.discard(g.cwd)
-                    else:
-                        collapsed.add(g.cwd)
-                elif kind == "more":
-                    if g.cwd in expanded:
-                        expanded.discard(g.cwd)
-                    else:
-                        expanded.add(g.cwd)
+                panes, viewer = refresh_hidden(groups, reap_state, target)
+                # The highlight is whatever row the cursor is on, even before the
+                # first key press; `selected` is only filled in below a key event.
+                highlight = (
+                    row_key(rows[cursor])
+                    if rows and 0 <= cursor < len(rows)
+                    else selected
+                )
+                before = presented
+                highlight, presented = follow_viewer_switch(
+                    highlight, presented, panes, groups, viewer
+                )
+                selected = highlight
+                if presented != before:
+                    _write_state(presented)
+                continue
+            rows = list(rows_for(groups, flt, collapsed, expanded))
+            row = highlighted_row(rows, cursor)
+
+            if ch in (curses.KEY_UP, ord("k")):
+                cursor = max(0, cursor - 1)
+            elif ch in (curses.KEY_DOWN, ord("j")):
+                cursor = min(len(rows) - 1, cursor + 1)
+            elif ch in (ord("g"), curses.KEY_HOME):
+                cursor = 0
+            elif ch in (ord("G"), curses.KEY_END):
+                cursor = max(0, len(rows) - 1)
+            elif ch == ord("q"):
+                if quit_keys():
+                    return
+                continue
+            elif ch == ord("r"):
+                groups = load_groups()
+                refresh_hidden(groups, reap_state, target)
+                count = reload_managed_panes(groups, target)
+                if count:
+                    noun = "session" if count == 1 else "sessions"
+                    message = f" Reloading {count} {noun} "
                 else:
-                    warning = present_session(s, groups, target, reap_state)
+                    message = " No live sessions to reload "
+                message_until = time.time() + 4
+                continue
+            elif ch == ord("/"):
+                typed = prompt_line(stdscr, "filter: ", "")
+                if typed is not None:
+                    flt = typed
+                    cursor = 0
+                    selected = None
+                continue
+            elif ch == ord(":"):
+                if command_line(row, "") is not None:
+                    # Land on the new goal: show its project and drop the filter.
+                    flt = ""
+                continue
+            elif ch == ord("R"):
+                text, warning = rename_prefill(row)
+                if not text:
+                    say(warning)
+                    continue
+                command_line(row, text)
+                continue
+            elif ch == ord("x"):
+                say(*done_goal(groups, row))
+                continue
+            elif ch == ord("D"):
+                ask, warning = delete_prompt(row)
+                if not ask:
+                    say(warning)
+                    continue
+                draw(stdscr, groups, flt, cursor, offset, collapsed, ask, expanded)
+                try:
+                    answer = stdscr.getch()
+                    while answer == -1:  # a refresh tick is not an answer
+                        answer = stdscr.getch()
+                except KeyboardInterrupt:
+                    if quit_keys():
+                        return
+                    continue
+                if answer != ord("y"):
+                    continue
+                say(*delete_goal_row(groups, row))
+                continue
+            elif ch in (ord("n"), ord(NEW_NO_PICKER_KEY)):
+                if row:
+                    harness, goal_id = new_session_plan(row)
+                    installed = installed_harnesses() if ch == ord("n") else []
+                    if ch == ord("n") and should_pick_harness(row, installed):
+                        try:
+                            harness = harness_picker(
+                                stdscr, installed, picker_start(harness, installed)
+                            )
+                        except KeyboardInterrupt:
+                            if quit_keys():
+                                return
+                            continue
+                        if harness is None:
+                            continue
+                    warning = new_session(
+                        target, row[1].cwd, groups, reap_state, harness, goal_id
+                    )
                     if warning:
                         message = f" {warning} "
                         message_until = time.time() + 4
-                    else:
-                        message = ""
-                        presented = s.id
                     groups = load_groups()
-        # Remember identity of the newly highlighted row for the next sort.
-        if rows and 0 <= cursor < len(rows):
-            selected = row_key(rows[cursor])
+                    presented = _read_state()
+            elif ch in (curses.KEY_LEFT, ord("h")):
+                if row:
+                    kind, g, s = row
+                    if kind == "group":
+                        collapsed.add(g.cwd)
+                    elif kind == "goal":
+                        fold_goal(g, s, True)
+                    elif kind in ("more", "goal_more"):
+                        expanded.discard(more_key(kind, g, s))
+            elif ch in (curses.KEY_RIGHT, ord("l")):
+                if row:
+                    kind, g, s = row
+                    if kind == "group":
+                        collapsed.discard(g.cwd)
+                    elif kind == "goal":
+                        fold_goal(g, s, False)
+                    elif kind in ("more", "goal_more"):
+                        expanded.add(more_key(kind, g, s))
+            elif ch in (curses.KEY_ENTER, 10, 13):
+                if row:
+                    kind, g, s = row
+                    if kind == "group":
+                        if g.cwd in collapsed:
+                            collapsed.discard(g.cwd)
+                        else:
+                            collapsed.add(g.cwd)
+                    elif kind == "goal":
+                        fold_goal(g, s, not s.collapsed)
+                    elif kind in ("more", "goal_more"):
+                        expanded ^= {more_key(kind, g, s)}
+                    else:
+                        warning = present_session(s, groups, target, reap_state)
+                        if warning:
+                            message = f" {warning} "
+                            message_until = time.time() + 4
+                        else:
+                            message = ""
+                            presented = s.id
+                        groups = load_groups()
+            # Remember identity of the newly highlighted row for the next sort.
+            if rows and 0 <= cursor < len(rows):
+                selected = row_key(rows[cursor])
+        except KeyboardInterrupt:
+            if quit_keys():
+                return
+
+
+def list_lines(groups: list[Group]) -> list[str]:
+    """Plain-text dump: projects, goals nested under them, then sessions."""
+
+    def row(s: Session, indent: str) -> str:
+        return (f"{indent}{STATUS[s.status][0]} [{s.status:7}] "
+                f"[{s.harness:6}] "
+                f"{s.title[:60]:<60} {rel_time(s.last_ts):>4}  {s.id}")
+
+    labels = canonical_group_names(groups)
+    out = []
+    for g in groups:
+        out.append(labels.get(g.cwd, g.cwd))
+        member_ids = goal_member_ids(g)
+        goal_rows = []
+        for gl in g.goals:
+            members = goal_members(g, gl)
+            goal_rows.append((gl, members, goal_age_ts(g, gl, members)))
+        loose = [s for s in g.sessions if s.id not in member_ids]
+        for _, kind, item, members in recency_top(loose, goal_rows):
+            if kind == "session":
+                out.append(row(item, "  "))
+                continue
+            gl = item
+            mark = "✓" if gl.done else "▾"
+            out.append(f"  {mark} {gl.name}  ({len(members)})")
+            out.extend(row(m, "    ") for m in members)
+    return out
 
 
 def main():
@@ -2048,14 +2990,8 @@ def main():
         sys.exit(0 if request_new_session(pane) else 1)
 
     if args.list:
-        groups = load_groups()
-        labels = canonical_group_names(groups)
-        for g in groups:
-            print(labels.get(g.cwd, g.cwd))
-            for s in g.sessions:
-                print(f"  {STATUS[s.status][0]} [{s.status:7}] "
-                      f"[{s.harness:6}] "
-                      f"{s.title[:60]:<60} {rel_time(s.last_ts):>4}  {s.id}")
+        for line in list_lines(load_groups()):
+            print(line)
         return
 
     if not args.target:

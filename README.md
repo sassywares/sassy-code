@@ -13,8 +13,10 @@ Session titles are truncated to a single line with an ellipsis; the age is
 right-aligned. Projects are grouped by working directory and labelled with the
 folder's own name — `root` for home, `tap2-workspace` instead of the whole path
 — with a blank line between projects. A project shows its five most recent
-sessions, then `… N more`; that row toggles to `… show fewer` once expanded. A
-live (running) session is never hidden behind the limit.
+items (a goal counts as one), then `… N more`; that row toggles to `… show
+fewer` once expanded. An expanded goal shows its three most recent sessions,
+then its own `… N more` counting sessions. A live (running) session is never
+hidden behind either limit, and a collapsed goal shows ● when it holds one.
 
 ## Table of contents
 
@@ -52,8 +54,14 @@ cd sassy-code
 
 If the file is not executable, either `chmod +x main` or run it as `bash main`.
 
-- Run outside tmux: creates a `sassy-code` session with the two panes.
-- Run inside tmux: splits the current window and adds the panel to the left.
+- Run outside tmux: creates the dedicated `sassy-code` session (two panes) and attaches.
+- Run inside tmux: switches your client to the `sassy-code` session, creating it
+  first when missing. Your current window is never split, and running it again
+  from inside `sassy-code` does not add a second panel. A `sassy-code` session
+  left without a live panel (for example after a crash) is rebuilt by adding a
+  new window; the old panel-less window is kept, and any agent in it keeps running. The launcher marks the panel pane before it starts, so
+  running it twice in quick succession still gives one panel (a mark older than
+  ten seconds with no Python behind it counts as dead).
 - `SASSY_CODE_WIDTH=25% ./main` overrides the left pane width (default `22%`).
 - `SASSY_CODE_NEW_KEY=C-n ./main` chooses the prefix key for new sessions
   (default `N`; a key that is already bound is never taken).
@@ -87,19 +95,44 @@ ln -s "$PWD/main" ~/.local/bin/sassy-code
 
 Keys in the left pane: `↑/↓` or `j/k` move, `g/G` jump, `Enter` presents a
 session (and focuses the right pane), collapses/expands a directory, or toggles
-`… N more`/`… show fewer`, `←/→`
-or `h/l` collapse/expand a directory or a project's session limit, `n` new
-session in the selected project (using the harness of the highlighted session),
+`… N more`/`… show fewer` (a project's or a goal's), `←/→`
+or `h/l` collapse/expand a directory, or a project's or goal's `… N more` row, `n` new
+session in the selected project (using the harness of the highlighted session).
+On a project heading or a goal row, with both harnesses installed, `n` first
+opens a small boxed harness picker (`π Pi`, `✳ Claude Code`), preselected on the
+inferred harness: `j/k`/arrows move, `1`–`9` or `Enter` pick, `Esc`/`q` cancel
+(nothing is created). Session rows, `goal_more` rows and `prefix + N` never
+ask; they use the inferred harness. With one harness installed, `n` never asks.
 `r` reload every managed Pi session (sends `/reload` to each live Pi pane and
 refreshes the session list), `/` filter (which auto-expands groups and also
-matches the harness name), `q` quit.
+matches the harness name and goal names), `:` command line, `q` quit (this only detaches your client; the session keeps running).
+`:goal:create <name>` makes an empty goal in the highlighted row's project
+(case-insensitive duplicate names are refused); `Enter`/`h`/`l` collapse and
+expand it, and the state persists in `~/.sassywares/sassy-code/goals.json`.
+Goal-row keys (the footer then reads `⏎ toggle  n new  R rename  x done  D
+delete`): `R` opens the `:` line pre-filled with `goal:rename <name>` (empty or
+duplicate names are refused), `x` marks the goal done (`✓`, collapsed, sunk
+below the project's active goals) and `x` again reopens and expands it, and `D` asks
+`Delete goal '<name>'? y/n` in the footer; only `y` deletes. Deleting never
+touches sessions: its sessions become loose in the project. With an unreadable
+`goals.json` all three refuse with a footer warning. `--list` shows done goals
+with `✓`.
+A Pi `/handoff`, `/fork`, or `/clone` from a goal session stays in that goal
+when it lands in the same project. Known limits: a fork into another working
+directory belongs to that project and stays loose, a lineage passing through
+another directory breaks (lineage resolves within one project), and a session started with Pi `/new` or Claude Code `/clear` inside a
+goal session has no link to it and lands loose; start new phases with `n` /
+`prefix + N` instead.
 The highlight is attached to the session, not the row, so it follows a session
 as new activity re-sorts the list. The footer wraps to show every binding at the
-default narrow panel width. Quitting moves a
-viewer whose agent is still running into the background before the panel exits.
+default narrow panel width. Quitting (`q` or `Ctrl-C`) only detaches your client from the
+`sassy-code` tmux session. The session, panel, viewer and agents keep running;
+run `sassy-code` again to reattach. To end it for good, run
+`tmux kill-session -t sassy-code`.
 From anywhere in the window, `prefix + N` asks the panel to run its own `n`
 action — a new session in the project under the panel highlight — without
-moving focus, so the keyboard stays in the viewer. The shortcut is installed
+moving focus, so the keyboard stays in the viewer (it sends the panel the
+internal key `N`, `n` without the picker, so it never asks which harness). The shortcut is installed
 only when that key is free; set `SASSY_CODE_NEW_KEY` to choose another.
 Switch back to the panel with your tmux prefix + arrow. The launcher removes
 repeat from tmux's default repeatable prefix+arrow `select-pane` bindings so the
@@ -168,11 +201,10 @@ descendant agent process and removes the leftover shell and window. If a session
 is already running outside managed panes, `Enter` is refused with a warning
 until that external process exits.
 
-On `q` (and `Ctrl-C`), a viewer with a live agent process is swapped into the
-background session behind a temporary placeholder shell, even if the session
-file still looks complete. It survives after the panel exits for as long as the
-tmux server and `sassy-code-bg` session live. A completed viewer with no live
-agent does not need preserving.
+On `q` (and `Ctrl-C`) nothing is moved or killed: your client just detaches
+from the `sassy-code` tmux session. The panel, viewer and every agent keep
+running, and `sassy-code` reattaches to them. End the session for good with
+`tmux kill-session -t sassy-code`.
 
 You can inspect managed panes with:
 
