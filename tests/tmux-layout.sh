@@ -197,3 +197,32 @@ esac
 
 printf 'PASS: cold start creates a narrow left panel beside the wide viewer\n'
 
+# Scenario 3: a panel that fails to start keeps its pane open with the exit
+# status, instead of vanishing and leaving an empty viewer.
+FAIL_DIR="$TMP/failing"
+mkdir -p "$FAIL_DIR"
+cp "$ROOT/main" "$FAIL_DIR/main"
+printf 'import sys\nsys.exit(3)\n' > "$FAIL_DIR/panel.py"
+t kill-session -t =sassy-code 2>/dev/null || true
+env TMUX="$SOCKET" TMUX_PANE="$VIEWER" TERM="${TERM:-xterm-256color}" \
+  "$FAIL_DIR/main"
+fail_pane=""
+for _ in $(seq 1 50); do
+  fail_pane="$(t list-panes -t =sassy-code -F '#{pane_id} #{pane_left}' \
+    | awk '$2 == 0 {print $1; exit}')"
+  if [ -n "$fail_pane" ] \
+    && t capture-pane -pJ -t "$fail_pane" | grep -q 'panel exited with status 3'; then
+    break
+  fi
+  sleep 0.1
+done
+t capture-pane -pJ -t "$fail_pane" | grep -q 'panel exited with status 3' \
+  || fail "failed panel did not show its exit status"
+t send-keys -t "$fail_pane" Enter
+for _ in $(seq 1 30); do
+  t list-panes -t =sassy-code -F '#{pane_id}' | grep -qx "$fail_pane" || break
+  sleep 0.1
+done
+! t list-panes -t =sassy-code -F '#{pane_id}' | grep -qx "$fail_pane" \
+  || fail "failed panel pane did not close after Enter"
+printf 'PASS: a failed panel shows its exit status and closes on Enter\n'

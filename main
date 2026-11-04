@@ -119,8 +119,12 @@ build_layout() {
   tmux set-option -p -t "$PANEL_PANE" @sassy_panel "$(date +%s)"
   # After the panel exits only its own pane goes: never kill the window, which
   # may hold a live viewer agent. (q only detaches; the panel keeps running.)
+  # A failed panel (e.g. macOS denying read access to its folder) keeps its
+  # pane open until Enter, so the error stays visible instead of leaving an
+  # empty viewer. 130 is Ctrl-C, a normal way out.
+  local on_fail='s=$?; [ "$s" -eq 130 ] || { printf "\nsassy-code: panel exited with status %s. Press Enter to close.\n" "$s"; read -r _; }'
   tmux send-keys -t "$PANEL_PANE" \
-    "$PANEL_CMD --target $(printf '%q' "$SESS"); tmux kill-pane -t $(printf '%q' "$PANEL_PANE")" Enter
+    "$PANEL_CMD --target $(printf '%q' "$SESS") || { $on_fail; }; tmux kill-pane -t $(printf '%q' "$PANEL_PANE")" Enter
   tmux select-window -t "$WIN"
   tmux select-pane -t "$PANEL_PANE"   # panel owns the keyboard until Enter
 }
