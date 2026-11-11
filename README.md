@@ -68,30 +68,10 @@ If the file is not executable, either `chmod +x main` or run it as `bash main`.
 - `SASSY_CODE_NEW_HARNESS=claude ./main` makes `n` start Claude Code when the
   highlighted project has no session to infer a harness from. Without the
   override, the panel picks whichever harness is installed.
-
-## Optional: add an alias
-
-Run `sassy-code` from anywhere by adding an alias to your shell config. Run this
-from inside the cloned repo so `$PWD` resolves to it.
-
-zsh (`~/.zshrc`):
-
-```sh
-echo "alias sassy-code='$PWD/main'" >> ~/.zshrc && source ~/.zshrc
-```
-
-bash (`~/.bashrc`, or `~/.bash_profile` on macOS):
-
-```sh
-echo "alias sassy-code='$PWD/main'" >> ~/.bashrc && source ~/.bashrc
-```
-
-Then just run `sassy-code`. If you prefer a command over an alias, symlink it onto
-your `PATH` instead:
-
-```sh
-ln -s "$PWD/main" ~/.local/bin/sassy-code
-```
+- `PI_CODING_AGENT_SESSION_DIR` points the panel at a non-default Pi session
+  store. For Claude Code, `SASSY_CODE_CLAUDE_SESSION_DIR` is the `projects`
+  directory itself; `CLAUDE_CONFIG_DIR` is the config directory, and the panel
+  appends `projects` to it.
 
 Keys in the left pane: `↑/↓` or `j/k` move, `g/G` jump, `Enter` presents a
 session (and focuses the right pane), collapses/expands a directory, or toggles
@@ -139,6 +119,30 @@ repeat from tmux's default repeatable prefix+arrow `select-pane` bindings so the
 next arrow reaches the panel; bindings with a different command are left alone. A
 user binding byte-identical to tmux's default is indistinguishable and will
 be normalized.
+
+## Optional: add an alias
+
+Run `sassy-code` from anywhere by adding an alias to your shell config. Run this
+from inside the cloned repo so `$PWD` resolves to it.
+
+zsh (`~/.zshrc`):
+
+```sh
+echo "alias sassy-code='$PWD/main'" >> ~/.zshrc && source ~/.zshrc
+```
+
+bash (`~/.bashrc`, or `~/.bash_profile` on macOS):
+
+```sh
+echo "alias sassy-code='$PWD/main'" >> ~/.bashrc && source ~/.bashrc
+```
+
+Then just run `sassy-code`. If you prefer a command over an alias, symlink it onto
+your `PATH` instead:
+
+```sh
+ln -s "$PWD/main" ~/.local/bin/sassy-code
+```
 
 ## How it works
 
@@ -193,8 +197,10 @@ Once the latest assistant message ends with a terminal reason (`stop`, `error`,
 `aborted` for Pi; `end_turn`, `stop_sequence`, `max_tokens`, `refusal` for
 Claude Code), the panel reaps the hidden pane after a short refresh grace
 period. Switching away always starts that grace period instead of killing from a
-file-only completion; the JSONL can lag the agent process. The visible session
-is never auto-reaped.
+file-only completion; the JSONL can lag the agent process. A Claude Code
+session with open background tasks (announced in tool results, closed by a
+`<task-notification>`) is not reaped even after a terminal reason, so resumed
+agents keep running. The visible session is never auto-reaped.
 
 If a hidden agent exits on its own, the panel detects that the pane has no live
 descendant agent process and removes the leftover shell and window. If a session
@@ -255,6 +261,9 @@ transcripts are frequently large and the panel refreshes every two seconds.
 - `main` — tmux launcher / layout.
 - `panel.py` — the curses control panel (`--list` prints a plain-text dump;
   `--new-session --pane <id>` is the shortcut entry point).
+- `VERSION` — the current release version.
+- `bin/` — the vendored release script and its ignore list.
+- `.sassywares/` — Sassy Skills config and README.
 - `tests/` — isolated tmux lifecycle and key-binding regression tests.
 - `AGENTS.md` — repository guide for agents and contributors.
 - `CONCEPTS.md` — vocabulary used in this project.

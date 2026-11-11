@@ -1,0 +1,15 @@
+# Paths that do not count as consumer-facing for the release script.
+# This replaces the script's default list, so it repeats it and adds .gitignore.
+# Consumer-facing here: main, panel.py, README.md, CONCEPTS.md, VERSION, assets/
+# (the README's screenshot).
+AGENTS.md
+docs/
+tests/
+.sassywares/
+.github/
+.agents/
+.claude/
+scripts/
+bin/release
+bin/release-ignore
+.gitignore

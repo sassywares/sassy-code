@@ -16,6 +16,10 @@ instead of killing it.
 |---|---|
 | `main` | Bash launcher. Switches to (or creates) the dedicated `sassy-code` session, builds the layout there, passes the viewer pane id to the panel. |
 | `panel.py` | The curses control panel. Reads both harness session stores, manages viewer/background panes, renders the list, dispatches actions. |
+| `VERSION` | Current release version; see Releasing. |
+| `bin/` | `release` (vendored release script) and `release-ignore` (paths that do not count as consumer-facing). |
+| `.sassywares/` | Sassy Skills config and README (project-agnostic metadata). |
+| `.agents/skills/sassy-code-release/` | Project skill that runs `bin/release`. |
 | `tests/` | Isolated tmux tests (`tmux -L`, `-f /dev/null`) and key-binding regressions. |
 | `CONCEPTS.md` | Vocabulary used across the repo. Read before changing user-facing terms. |
 | `docs/solutions/` | Durable learnings. Read the relevant entry before re-investigating a problem. |
@@ -28,10 +32,6 @@ Requires `tmux`, `python3`, bash, and at least one of `pi` / `claude`. See
 ```bash
 ./main                                      # or the `sassy-code` shell alias
 ./panel.py --list                            # plain-text dump, no TUI
-python3 -m unittest tests.test_background    # isolated tmux lifecycle tests
-python3 -m unittest tests.test_goals tests.test_goal_lifecycle tests.test_state  # goals store, rows, state dir
-bash tests/tmux-pane-keys.sh                 # isolated key-binding regression
-bash tests/tmux-layout.sh                    # isolated narrow-panel geometry
 ```
 
 The launcher self-locates via `BASH_SOURCE`, so it works from any path or symlink.
@@ -128,6 +128,83 @@ preselected on the inferred harness, skipped with one harness installed;
 `should_pick_harness()` is the decision). Session rows, `goal_more` rows and the
 `N` shortcut never open it.
 
+## Direction
+
+The Pi half of the panel logic can become a native Pi extension:
+`SessionManager.listAll()` lists sessions and `ctx.switchSession(path)` resumes
+one in place, at the cost of the side-by-side view. The two-pane layout
+fundamentally requires tmux, since a Pi extension lives inside one Pi process's
+TUI, and a combined Pi + Claude Code list has no single native home at all. See
+[`docs/solutions/pi-extension/`](docs/solutions/pi-extension/).
+
+## Testing
+
+```bash
+python3 -m unittest tests.test_background    # isolated tmux lifecycle tests
+python3 -m unittest tests.test_goals tests.test_goal_lifecycle tests.test_state  # goals store, rows, state dir
+bash tests/tmux-pane-keys.sh                 # isolated key-binding regression
+bash tests/tmux-layout.sh                    # isolated narrow-panel geometry
+```
+
+Tmux tests use an isolated server (`tmux -L`, `-f /dev/null`).
+
+## Releasing
+
+sassy-code is versioned: `VERSION` at the repo root holds the current version
+(`0.1.0` to start). Releases go through sassy-ship (`commit.branch: current`):
+after the approved push, the `hooks.push` `after_push` hook in
+`.sassywares/config.yaml` runs the `sassy-code-release` project skill, which runs
+the vendored `bin/release` script. The script comes from
+[sassywares/sassy-release](https://github.com/sassywares/sassy-release); refresh
+the vendored copy by comparing its `# sassy-release vN` header with the repo's
+latest tag.
+
+- Patch bumps are automatic: when consumer-facing files changed since the
+  highest `v*` tag on origin, the script bumps `VERSION`, commits
+  `chore: release v<version>`, pushes main, then creates and pushes the
+  annotated tag `v<version>`.
+- A version already above the highest tag (a hand-written minor or major bump,
+  an interrupted run, the first release) is tagged as-is. Minor and major bumps
+  are hand-edited in `VERSION`; a hand-written version must be >= the highest
+  tag on origin, or the script stops.
+- A prerelease (`X.Y.Z-beta.1`) is tagged as-is and never auto-bumped: once it
+  is tagged, later consumer-facing changes make the script stop until the next
+  version is hand-set.
+- Not consumer-facing: the paths in `bin/release-ignore`, which repeats
+  the script's defaults (`AGENTS.md`, `docs/`, `tests/`, `.sassywares/`,
+  `.github/`, `.agents/`, `.claude/`, `scripts/`, `bin/release`,
+  `bin/release-ignore`) plus `.gitignore`. Everything
+  else counts, including `CONCEPTS.md` (user-facing vocabulary), `README.md`,
+  `main`, `panel.py`, and `assets/` (the README's screenshot, so it stays
+  consumer-facing).
+- Recovery: run `bin/release` from a clean `main`. It is idempotent: it
+  tags what is already bumped and pushes a missing tag.
+- If any step fails, report the failure; never continue silently.
+- Never release while `README.md` describes old behavior (see Docs upkeep).
+
+## Docs upkeep
+
+Any change to user-visible behavior, install steps, commands or keys,
+configuration, environment variables, requirements, or outputs updates
+`README.md` in the **same commit**. A stale README is a review finding, and a
+release never goes out with the README describing old behavior.
+
+| Change | README section |
+|---|---|
+| Key or footer binding, prompt, picker, `:` command | Quick start (the keys paragraph) |
+| Env var (`SASSY_CODE_WIDTH`, `SASSY_CODE_NEW_KEY`, `SASSY_CODE_NEW_HARNESS`, session-dir overrides) | Quick start bullets |
+| New dependency, supported platform, harness | Requirements |
+| Install, launcher, alias, layout behavior | Quick start, Optional: add an alias |
+| Goals, list rendering, limits, glyphs | Intro and the keys paragraph in Quick start |
+| Switching, swap, reaping, detach, state files | How it works, Background lifecycle |
+| Session stores, status rules, parsing | Data source |
+| New or moved file | Files |
+
+- Update `CONCEPTS.md` when a user-facing term is added or renamed.
+- Update this file when a rule or an architecture fact changes.
+- **Version pins.** The README carries no literal version pins, and the release
+  script never edits the README, so a pin would go stale on every release.
+
 ## Conventions
 
 - **Stdlib only.** `panel.py` relies solely on the Python standard library.
@@ -185,12 +262,3 @@ preselected on the inferred harness, skipped with one harness installed;
 - Durable learnings and past bugs: [`docs/solutions/`](docs/solutions/)
 - Toolchain: [`docs/solutions/tmux/background-pane-swap.md`](docs/solutions/tmux/background-pane-swap.md)
 - Document new solved problems there rather than in code comments.
-
-## Direction
-
-The Pi half of the panel logic can become a native Pi extension:
-`SessionManager.listAll()` lists sessions and `ctx.switchSession(path)` resumes
-one in place, at the cost of the side-by-side view. The two-pane layout
-fundamentally requires tmux, since a Pi extension lives inside one Pi process's
-TUI, and a combined Pi + Claude Code list has no single native home at all. See
-[`docs/solutions/pi-extension/`](docs/solutions/pi-extension/).

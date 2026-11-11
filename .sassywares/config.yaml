@@ -35,7 +35,8 @@ git:
 #   fe: dev
 
 # --- Commit ---------------------------------------------------------------
-# current: commit on the checked-out branch, even on a base branch.
+# current: commit on the checked-out branch, even on a base branch, then push
+#          it to its upstream. No PR: pr.* and hooks.pr are ignored; hooks.push runs.
 # new: never commit on a base branch — sassy-work, sassy-lfg, and sassy-debug
 #      cut a branch at the start of the run and stay on it.
 commit:
@@ -64,3 +65,9 @@ hooks:
     #   before_create: []
     # release/*:          # a family of heads
     #   after_merge: [notify mode:auto]
+    #
+    # Push hooks (hooks.push) run only under `commit.branch: current`, right after
+    # a successful push, keyed by the pushed branch like hooks.pr. Same entry shape.
+  push:
+    "*":
+      after_push: [sassy-code-release]   # the push just succeeded
