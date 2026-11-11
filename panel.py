@@ -105,8 +105,10 @@ class Session:
     last_role: str | None = None
     last_stop_reason: str | None = None
     last_error: bool = False
-    # Background task ids announced but not yet closed (Claude Code only).
+    # Task/agent ids with a background run still open (Claude Code only).
     open_tasks: frozenset[str] = frozenset()
+    # A queued input (e.g. a task notification) the main thread has not acted on.
+    queued_input: bool = False
 
     @property
     def title(self) -> str:
@@ -114,7 +116,7 @@ class Session:
 
     def is_complete(self) -> bool:
         """True once the latest turn has a terminal assistant stop reason."""
-        if self.open_tasks:
+        if self.open_tasks or self.queued_input:
             return False  # background work outlives the main thread's turn
         if self.last_role in ("user", "toolResult"):
             return False
@@ -253,13 +255,26 @@ CLAUDE_NON_PROMPT_PREFIXES = (
     "<local-command-", "<command-stdout", "Caveat:",
 )
 CLAUDE_TASK_ID_RE = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
+CLAUDE_TOOL_USE_ID_RE = re.compile(r"<tool-use-id>\s*([^<\s]+)\s*</tool-use-id>")
+CLAUDE_NOTIFICATION_RE = re.compile(r"<task-notification>.*?</task-notification>", re.S)
 # Background launch results, matched at the start of the result body (group 1
 # = task id) and only for the tool_use that launched them. The Agent wording is
 # confirmed on disk; the Bash wording follows Claude Code's documented text.
 CLAUDE_TASK_OPEN_RES = {
     "agent": re.compile(r"\A\s*Async agent launched successfully.*?agentId:\s*([\w-]+)", re.S),
     "bash": re.compile(r"\A\s*(?:Command )?running in background with ID:\s*([\w-]+)", re.I),
+    # SendMessage resuming a finished agent starts a new background run.
+    "resume": re.compile(
+        r'\A\s*\{.*?"message"\s*:\s*"Resuming agent.*?"resumedAgentId"\s*:\s*"([\w-]+)"', re.S),
 }
+# An agent that stopped while its own background work still runs sends an
+# interim `<task-notification>` (summary "... is waiting on its own background
+# work", note "... stopped with background work of its own still running ...");
+# the same task id notifies again when it truly finishes. It closes nothing.
+CLAUDE_INTERIM_NOTE_RE = re.compile(
+    r"waiting on its own background work|stopped with background work of its own")
+CLAUDE_NOTE_TEXT_RE = re.compile(
+    r"<(summary|note)>(.*?)</\1>", re.S)
 SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 
 
@@ -288,32 +303,75 @@ def _claude_launches(content, launches: dict[str, str]) -> None:
         args = b.get("input")
         if b.get("name") in ("Agent", "Task"):
             launches[b.get("id")] = "agent"
+        elif b.get("name") == "SendMessage":
+            launches[b.get("id")] = "resume"
         elif b.get("name") == "Bash" and isinstance(args, dict) \
                 and args.get("run_in_background"):
             launches[b.get("id")] = "bash"
 
 
-def _claude_task_ids(content, launches: dict[str, str]) -> tuple[set[str], set[str]]:
-    """(opened, closed) background task ids announced by one entry."""
-    opened: set[str] = set()
-    closed: set[str] = set()
+def _claude_task_runs(
+    content, launches: dict[str, str], pos: int,
+    opened: dict[tuple[str, str], int],
+    closed_runs: set[str], closed_tasks: dict[str, int],
+    first_seen: dict[str, int],
+    consumed: set[str], op: str | None = None,
+) -> list[str]:
+    """Fold the runs opened and closed by one entry (file position `pos`).
+
+    A run is (launching tool_use id, task id), recorded with its position. A
+    notification naming a `<tool-use-id>` closes that run wherever it sits. One
+    without it (a resumed process reporting `stopped`, or a plain `completed`)
+    closes only runs of its `<task-id>` launched earlier than the notification's
+    first copy: it is written several times (queue, then user entry), and a
+    late copy must not close a run launched in between, so `first_seen` keeps
+    the position where each notification's text first appears. Once an instance
+    was consumed (dequeued, removed, or seen as a user entry; `consumed`), a
+    later `enqueue` (`op`) of the same text is a new instance and restarts its
+    position. An interim notification (`CLAUDE_INTERIM_NOTE_RE`) closes nothing.
+    Returns the id-less note texts seen, for the caller to mark consumed.
+    """
+    keys: list[str] = []
     if isinstance(content, list):
         for b in content:
             if isinstance(b, dict) and b.get("type") == "tool_result":
-                kind = launches.get(b.get("tool_use_id"))
+                tuid = b.get("tool_use_id")
+                kind = launches.get(tuid)
                 if kind:
                     body = b.get("content")
                     body = body if isinstance(body, str) else text_of(body)
-                    opened.update(CLAUDE_TASK_OPEN_RES[kind].findall(body))
+                    for tid in CLAUDE_TASK_OPEN_RES[kind].findall(body):
+                        opened.setdefault((tuid, tid), pos)
         blocks = [b.get("text", "") for b in content
                   if isinstance(b, dict) and b.get("type") == "text"]
     else:
         blocks = [content] if isinstance(content, str) else []
     for block in blocks:
         block = SYSTEM_REMINDER_RE.sub(" ", block)
-        if block.lstrip().startswith("<task-notification"):
-            closed.update(CLAUDE_TASK_ID_RE.findall(block))
-    return opened, closed
+        if not block.lstrip().startswith("<task-notification"):
+            continue
+        for note in CLAUDE_NOTIFICATION_RE.findall(block):
+            if any(CLAUDE_INTERIM_NOTE_RE.search(m[1])
+                   for m in CLAUDE_NOTE_TEXT_RE.findall(note)):
+                continue
+            run_ids = CLAUDE_TOOL_USE_ID_RE.findall(note)
+            if run_ids:
+                closed_runs.update(run_ids)
+            else:
+                key = " ".join(note.split())
+                keys.append(key)
+                if op == "enqueue" and key in consumed:
+                    consumed.discard(key)
+                    first_seen[key] = pos
+                at = first_seen.setdefault(key, pos)
+                for tid in CLAUDE_TASK_ID_RE.findall(note):
+                    closed_tasks[tid] = max(closed_tasks.get(tid, -1), at)
+    return keys
+
+
+def _queue_text(content) -> str:
+    """Whitespace-normalised queue-operation content, for matching removes."""
+    return " ".join(content.split()) if isinstance(content, str) else ""
 
 
 def _load(line: str):
@@ -451,10 +509,16 @@ def parse_claude_session(path: str) -> Session | None:
     last_role = None
     last_is_error = False
     summary = custom = ai = ""
-    opened_all: set[str] = set()
-    closed_all: set[str] = set()
+    opened_all: dict[tuple[str, str], int] = {}
+    closed_runs: set[str] = set()
+    closed_tasks: dict[str, int] = {}
+    first_seen: dict[str, int] = {}
+    consumed: set[str] = set()
+    # Enqueued, not yet dequeued, removed, or answered items, FIFO: the raw
+    # content (whitespace-normalised) and its id-less note texts.
+    queued: list[tuple[str, list[str]]] = []
     launches: dict[str, str] = {}
-    for line in lines:
+    for pos, line in enumerate(lines):
         o = _load(line)
         if not o:
             continue
@@ -465,7 +529,25 @@ def parse_claude_session(path: str) -> Session | None:
                 s.created = ts
         if o.get("type") == "queue-operation":
             # Notifications are also queued while the turn is still running.
-            closed_all |= _claude_task_ids(o.get("content"), launches)[1]
+            op = o.get("operation")
+            keys = _claude_task_runs(o.get("content"), launches, pos,
+                                     opened_all, closed_runs, closed_tasks,
+                                     first_seen, consumed, op)
+            if op == "enqueue":
+                queued.append((_queue_text(o.get("content")), keys))
+            else:
+                # A remove names the item it drops (not always the oldest); a
+                # dequeue, or a remove without content, takes the oldest.
+                text = _queue_text(o.get("content"))
+                taken: list[str] = []
+                if not text and queued:
+                    taken = queued.pop(0)[1]
+                elif text:
+                    for i, (qt, qk) in enumerate(queued):
+                        if qt == text:
+                            taken = queued.pop(i)[1]
+                            break
+                consumed.update(keys or taken)
             continue
         if o.get("isSidechain"):
             continue
@@ -486,9 +568,9 @@ def parse_claude_session(path: str) -> Session | None:
         elif t == "user":
             m = o.get("message", {})
             content = m.get("content")
-            opened, closed = _claude_task_ids(content, launches)
-            opened_all |= opened
-            closed_all |= closed
+            consumed.update(_claude_task_runs(
+                content, launches, pos, opened_all, closed_runs, closed_tasks,
+                first_seen, consumed))
             if "tool_result" in _claude_content_types(content):
                 s.messages += 1
                 last_role, last_is_error = "toolResult", False
@@ -511,6 +593,12 @@ def parse_claude_session(path: str) -> Session | None:
             m = o.get("message", {})
             _claude_launches(m.get("content"), launches)
             s.messages += 1
+            # Heuristic bound on orphaned entries: some enqueued items are
+            # never dequeued or removed on disk, so a new assistant turn
+            # resets the queue. It can drop an item that is dequeued a few
+            # ms after an end_turn; that is harmless because the window is
+            # far shorter than the reap grace.
+            queued.clear()
             last_role = "assistant"
             s.last_role = last_role
             stop = m.get("stop_reason")
@@ -532,7 +620,10 @@ def parse_claude_session(path: str) -> Session | None:
     s.name = next(
         (clean_preview(c) for c in (custom, ai, summary) if c.strip()), ""
     )
-    s.open_tasks = frozenset(opened_all - closed_all)
+    s.open_tasks = frozenset(
+        tid for (run, tid), at in opened_all.items()
+        if run not in closed_runs and closed_tasks.get(tid, -1) <= at)
+    s.queued_input = bool(queued)
     s.last_error = last_is_error
     s.status = _infer_status(s)
     return s

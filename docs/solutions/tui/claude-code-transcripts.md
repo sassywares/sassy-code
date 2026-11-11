@@ -3,7 +3,7 @@ title: Merge Claude Code transcripts into the Pi session list behind a harness f
 category: tui
 tags: [claude-code, pi, harness, session-store, transcripts, parsing]
 created: 2026-10-25
-updated: 2026-10-28
+updated: 2026-11-10
 ---
 
 ## Problem
@@ -132,18 +132,53 @@ The rule, parsed from the main transcript only (`Session.open_tasks`):
   on disk) and `Bash` tool_uses with `input.run_in_background` true
   (`Command running in background with ID: <id>`). No background-Bash
   transcript was on disk, so that wording is Claude Code's documented text,
-  unverified. Monitor and Workflow have no examples and are not matched yet.
-- Every `<task-id>` in a `<task-notification>` closes its task, whatever the
-  status. One notification can carry several ids. The notification is a user
-  entry and is also queued as a `queue-operation` entry; both close tasks.
-- Open tasks are computed once as `opened - closed`, so order does not matter.
-  A `<task-notification>` is detected per text block after stripping
-  `<system-reminder>` blocks.
-- While any task is open, `is_complete()` is False (never reaped from file
-  state). Open tasks never expire. A resumed Claude emits a `stopped`
-  notification for tasks of the dead process, which closes them. Open tasks
-  do not make a session `active`: a live session already shows `running`
-  (process table / managed pane), and a dead one with stale open tasks reads
+  unverified. A `SendMessage` tool_use whose result is JSON saying
+  `"message":"Resuming agent ..."` with a `resumedAgentId` also opens a run:
+  resuming a finished agent starts it again in the background. Monitor and
+  Workflow have no examples and are not matched yet.
+- Tasks are tracked as runs keyed by the launching tool_use id (the Agent call,
+  or the SendMessage call for a resumed run), so a finished agent can be open
+  again after a resume. A `<task-notification>` carrying `<tool-use-id>` closes
+  only that run, wherever it sits in the file. One without it
+  (`stopped` from a resumed process, and also plain `completed` ones from
+  current Claude Code) closes only runs of its `<task-id>` launched before the
+  notification's first copy in the file; the notification is written several
+  times, so its position is where its text first appears, and a run resumed
+  after that stays open. Once a copy was consumed (dequeued, removed, or seen as
+  a user entry), a later `enqueue` of identical text is a new instance (a second
+  crash emits the same `stopped`) and restarts that position. One notification
+  can carry several ids.
+- An interim notification closes nothing. An agent that stops while its own
+  background work still runs notifies with `<summary>Agent "X" is waiting on its
+  own background work</summary>` and a `<note>` saying it "stopped with
+  background work of its own still running" (on disk, with or without
+  `<tool-use-id>`); the same task id notifies again, with a `finished` summary
+  and no `<tool-use-id>`, when it truly ends. `CLAUDE_INTERIM_NOTE_RE` matches
+  either phrase, but only inside `<summary>` or `<note>` (a final notification
+  whose `<result>` quotes the phrase still closes its run), and such notes are
+  skipped. A final notification does not always follow: a run that only ever got
+  an interim one (e.g. the session ended while the agent's own work was still
+  running) stays open. That errs toward keeping the hidden pane, which is
+  reaped once its agent process exits (the no-agent-process path).
+- The notification is often only queued (a `queue-operation` `enqueue`, then
+  `remove` or `dequeue`; a `remove` with content drops the queued item with that content, which is not always the oldest, while a `dequeue` or content-less `remove` takes the oldest) and never written as a user entry, which is why queue
+  content closes runs too. Duplicate copies are harmless.
+- Open runs are computed once as `opened - closed`. A `<task-notification>` is
+  detected per text block after stripping `<system-reminder>` blocks.
+  `open_tasks` is the set of ids of runs still open.
+- `Session.queued_input` is True while input is enqueued and not yet dequeued,
+  removed, or answered by a main-thread assistant entry (a FIFO: `enqueue`
+  appends; a `remove` with content drops the first queued item whose content
+  matches, and is a no-op if none does; a `dequeue` or content-less `remove`
+  drops the oldest; an assistant entry clears the queue; queued input means the
+  queue is non-empty).
+  The main thread has input (often the completion hand-back) it is about to act
+  on, so `is_complete()` stays False.
+- While any run is open or input is queued, `is_complete()` is False (never
+  reaped from file state). Open runs never expire. A resumed Claude emits a
+  `stopped` notification for runs of the dead process, which closes them. Open
+  runs do not make a session `active`: a live session already shows `running`
+  (process table / managed pane), and a dead one with stale open runs reads
   `idle` instead of `active` forever. The "no agent process in the pane" reap
   path is unchanged.
 - Slash-command echoes (`<command-...>`) are not turns, so `/model` after an

@@ -258,16 +258,285 @@ class BackgroundTaskTests(ClaudeTestCase):
 
     def test_close_before_open_is_order_independent(self):
         s = self.parse([
-            user(1, "go"), user(2, NOTE.format(ids="aaa111")),
+            user(1, "go"), user(2, RUN_NOTE.format(aid="aaa111", tuid="toolu_aaa111")),
             *launched(3, "aaa111"), assistant(4),
         ])
         self.assertEqual(s.open_tasks, frozenset())
+
+    def test_idless_close_before_launch_does_not_close_it(self):
+        s = self.parse([
+            user(1, "go"), user(2, NOTE.format(ids="aaa111")),
+            *launched(3, "aaa111"), assistant(4),
+        ])
+        self.assertEqual(s.open_tasks, {"aaa111"})
 
     def test_tasks_do_not_expire_but_dead_session_is_not_active(self):
         s = self.parse([user(1, "go"), *launched(2, "aaa111"), assistant(3)])
         self.assertEqual(s.open_tasks, {"aaa111"})
         self.assertFalse(s.is_complete())  # never reaped from file state
         self.assertEqual(panel._infer_status(s), "idle")  # years old, not running
+
+
+RESUME = (
+    '{"success":true,"message":"Resuming agent a74bb4f","resumedAgentId":"%s",'
+    '"note":"runs in the background"}'
+)
+RUN_NOTE = (
+    "<task-notification>\n<task-id>{aid}</task-id>\n"
+    "<tool-use-id>{tuid}</tool-use-id>\n"
+    "<status>completed</status>\n</task-notification>"
+)
+
+
+INTERIM_NOTE = (
+    "<task-notification>\n<task-id>{aid}</task-id>\n"
+    "<tool-use-id>{tuid}</tool-use-id>\n"
+    "<output-file>/tmp/tasks/{aid}.output</output-file>\n"
+    "<status>completed</status>\n"
+    '<summary>Agent "X" is waiting on its own background work</summary>\n'
+    "<note>This agent stopped with background work of its own still running. "
+    "It may resume on its own when that work completes or reports, and the "
+    "same task-id notifies again if it does; the result below may be interim."
+    "</note>\n<result>partial</result>\n</task-notification>"
+)
+
+
+def resumed(n: int, agent_id: str, tuid: str = "toolu_resume") -> list[dict]:
+    """SendMessage tool_use plus its "Resuming agent" result (two entries)."""
+    return [
+        tool_use(n, "SendMessage", tuid, to=agent_id, message="continue"),
+        result_for(n, tuid, RESUME % agent_id),
+    ]
+
+
+class ResumedRunTests(ClaudeTestCase):
+    def finished_agent(self) -> list[dict]:
+        return [
+            user(1, "go"), *launched(2, "aaa111"), assistant(3),
+            user(4, RUN_NOTE.format(aid="aaa111", tuid="toolu_aaa111")),
+        ]
+
+    def test_resume_after_complete_keeps_session_incomplete(self):
+        s = self.parse([*self.finished_agent(), *resumed(5, "aaa111"), assistant(6)])
+        self.assertEqual(s.open_tasks, {"aaa111"})
+        self.assertFalse(s.is_complete())
+
+    def test_resumed_runs_own_notification_closes_it(self):
+        s = self.parse([
+            *self.finished_agent(), *resumed(5, "aaa111"), assistant(6),
+            user(7, RUN_NOTE.format(aid="aaa111", tuid="toolu_resume")), assistant(8),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+        self.assertTrue(s.is_complete())
+
+    def test_earlier_runs_notification_does_not_close_resumed_run(self):
+        # Duplicate copies of the first run's notification arrive late.
+        s = self.parse([
+            *self.finished_agent(), *resumed(5, "aaa111"), assistant(6),
+            user(7, RUN_NOTE.format(aid="aaa111", tuid="toolu_aaa111")),
+        ])
+        self.assertEqual(s.open_tasks, {"aaa111"})
+
+    def test_idless_notification_closes_every_earlier_run_of_the_id(self):
+        s = self.parse([
+            *self.finished_agent(), *resumed(5, "aaa111"), assistant(6),
+            user(7, NOTE.format(ids="aaa111")),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+
+    def test_idless_stopped_does_not_close_a_later_run(self):
+        stopped = user(7, NOTE.format(ids="aaa111"))
+        s = self.parse([
+            *self.finished_agent(), *resumed(5, "aaa111"), assistant(6), stopped,
+            *resumed(8, "aaa111", "toolu_resume2"), assistant(9),
+        ])
+        self.assertEqual(s.open_tasks, {"aaa111"})
+        self.assertFalse(s.is_complete())
+        s = self.parse([
+            *self.finished_agent(), *resumed(5, "aaa111"), assistant(6), stopped,
+            *resumed(8, "aaa111", "toolu_resume2"), assistant(9),
+            user(10, RUN_NOTE.format(aid="aaa111", tuid="toolu_resume2")), assistant(11),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+        self.assertTrue(s.is_complete())
+
+    def test_late_copy_of_idless_note_does_not_close_run_launched_between(self):
+        note = NOTE.format(ids="aaa111")
+        s = self.parse([
+            *self.finished_agent(),
+            {"type": "queue-operation", "operation": "enqueue", "content": note},
+            *resumed(5, "aaa111"),
+            {"type": "queue-operation", "operation": "remove"},
+            user(6, note), assistant(7),
+        ])
+        self.assertEqual(s.open_tasks, {"aaa111"})
+        self.assertFalse(s.is_complete())
+
+    def test_interim_notification_with_tool_use_id_closes_nothing(self):
+        interim = INTERIM_NOTE.format(aid="aaa111", tuid="toolu_aaa111")
+        s = self.parse([
+            user(1, "go"), *launched(2, "aaa111"), assistant(3), user(4, interim),
+            assistant(5),
+        ])
+        self.assertEqual(s.open_tasks, {"aaa111"})
+        self.assertFalse(s.is_complete())
+        # The final notification for the same task id closes it.
+        s = self.parse([
+            user(1, "go"), *launched(2, "aaa111"), assistant(3), user(4, interim),
+            user(5, RUN_NOTE.format(aid="aaa111", tuid="toolu_aaa111")), assistant(6),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+        self.assertTrue(s.is_complete())
+
+    def test_idless_interim_notification_closes_nothing_until_final(self):
+        interim = INTERIM_NOTE.format(aid="aaa111", tuid="").replace(
+            "<tool-use-id></tool-use-id>\n", "")
+        queued = {"type": "queue-operation", "operation": "enqueue", "content": interim}
+        s = self.parse([
+            user(1, "go"), *launched(2, "aaa111"), assistant(3), queued,
+            {"type": "queue-operation", "operation": "remove", "content": interim},
+            user(4, interim), assistant(5),
+        ])
+        self.assertEqual(s.open_tasks, {"aaa111"})
+        self.assertFalse(s.is_complete())
+        s = self.parse([
+            user(1, "go"), *launched(2, "aaa111"), assistant(3), user(4, interim),
+            user(5, NOTE.format(ids="aaa111")), assistant(6),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+
+    def test_remove_with_content_drops_the_named_item_not_the_oldest(self):
+        a = NOTE.format(ids="aaa111")
+        i = INTERIM_NOTE.format(aid="aaa111", tuid="").replace(
+            "<tool-use-id></tool-use-id>\n", "")
+        q = lambda op, c=None: {"type": "queue-operation", "operation": op,
+                                **({"content": c} if c else {})}
+        # A stays queued while the interim is removed; A must not look consumed,
+        # so its second enqueue keeps the early position and the later run lives.
+        s = self.parse([
+            *self.finished_agent(), q("enqueue", a), q("enqueue", i), q("remove", i),
+            *resumed(5, "aaa111"), q("enqueue", a), q("dequeue"), q("dequeue"),
+            assistant(6),
+        ])
+        self.assertEqual(s.open_tasks, {"aaa111"})
+
+    def test_enqueue_enqueue_remove_second_dequeue_consumes_both(self):
+        a = NOTE.format(ids="aaa111")
+        b = NOTE.format(ids="bbb222")
+        q = lambda op, c=None: {"type": "queue-operation", "operation": op,
+                                **({"content": c} if c else {})}
+        s = self.parse([
+            *self.finished_agent(), q("enqueue", a), q("enqueue", b), q("remove", b),
+            q("dequeue"), *resumed(5, "aaa111"), q("enqueue", a), q("dequeue"),
+            assistant(6),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+
+    def test_final_notification_quoting_interim_phrase_in_result_closes_run(self):
+        note = RUN_NOTE.format(aid="aaa111", tuid="toolu_aaa111").replace(
+            "</task-notification>",
+            "<result>it was waiting on its own background work</result>"
+            "</task-notification>")
+        s = self.parse([
+            user(1, "go"), *launched(2, "aaa111"), assistant(3), user(4, note),
+            assistant(5),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+
+    def test_identical_idless_note_after_second_crash_closes_second_run(self):
+        note = NOTE.format(ids="aaa111")
+        enqueue = {"type": "queue-operation", "operation": "enqueue", "content": note}
+        remove = {"type": "queue-operation", "operation": "remove"}
+        s = self.parse([
+            *self.finished_agent(), *resumed(5, "aaa111"), assistant(6),
+            enqueue, remove, user(7, note),
+            *resumed(8, "aaa111", "toolu_resume2"), assistant(9),
+            enqueue, remove, user(10, note), assistant(11),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+        self.assertTrue(s.is_complete())
+
+    def test_duplicate_notifications_are_idempotent(self):
+        note = RUN_NOTE.format(aid="aaa111", tuid="toolu_resume")
+        s = self.parse([
+            *self.finished_agent(), *resumed(5, "aaa111"), assistant(6),
+            {"type": "queue-operation", "operation": "enqueue", "content": note},
+            user(7, note),
+            {"type": "queue-operation", "operation": "dequeue"},
+            assistant(8),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+
+    def test_sendmessage_without_resuming_text_opens_nothing(self):
+        s = self.parse([
+            user(1, "go"),
+            tool_use(2, "SendMessage", "ts", to="x", message="hi"),
+            result_for(2, "ts", '{"success":true,"message":"Message queued"}'),
+            assistant(3),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+        self.assertTrue(s.is_complete())
+
+    def test_resuming_text_from_other_tools_opens_nothing(self):
+        s = self.parse([
+            user(1, "go"),
+            tool_use(2, "Read", "tr", file_path="/docs.md"),
+            result_for(2, "tr", RESUME % "zzz"),
+            assistant(3),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+
+
+class QueuedInputTests(ClaudeTestCase):
+    ENQUEUE = {"type": "queue-operation", "operation": "enqueue",
+               "content": RUN_NOTE.format(aid="aaa111", tuid="toolu_aaa111")}
+
+    def test_enqueue_after_last_assistant_keeps_session_incomplete(self):
+        s = self.parse([user(1, "go"), assistant(2), dict(self.ENQUEUE)])
+        self.assertFalse(s.is_complete())
+
+    def test_enqueue_then_remove_is_not_pending(self):
+        for op in ("remove", "dequeue"):
+            s = self.parse([
+                user(1, "go"), assistant(2), dict(self.ENQUEUE),
+                {"type": "queue-operation", "operation": op},
+            ])
+            self.assertTrue(s.is_complete(), op)
+
+    def test_two_enqueues_need_two_removes(self):
+        enq = {"type": "queue-operation", "operation": "enqueue", "content": "x"}
+        rem = {"type": "queue-operation", "operation": "remove"}
+        base = [user(1, "go"), assistant(2), dict(enq), dict(enq), dict(rem)]
+        self.assertFalse(self.parse(base).is_complete())
+        self.assertTrue(self.parse([*base, dict(rem)]).is_complete())
+
+    def test_remove_with_content_drops_only_matching_item(self):
+        def enq(c):
+            return {"type": "queue-operation", "operation": "enqueue", "content": c}
+
+        def rem(c):
+            return {"type": "queue-operation", "operation": "remove", "content": c}
+        base = [user(1, "go"), assistant(2), enq("A"), enq("B"), rem("B")]
+        self.assertFalse(self.parse(base).is_complete())
+        self.assertTrue(self.parse([*base, rem("A")]).is_complete())
+
+    def test_remove_with_unmatched_content_leaves_queue(self):
+        s = self.parse([
+            user(1, "go"), assistant(2),
+            {"type": "queue-operation", "operation": "enqueue", "content": "A"},
+            {"type": "queue-operation", "operation": "remove", "content": "zzz"},
+        ])
+        self.assertFalse(s.is_complete())
+
+    def test_later_assistant_entry_clears_pending_input(self):
+        s = self.parse([user(1, "go"), assistant(2), dict(self.ENQUEUE), assistant(3)])
+        self.assertTrue(s.is_complete())
+
+    def test_sidechain_assistant_does_not_clear_pending_input(self):
+        side = assistant(3)
+        side["isSidechain"] = True
+        s = self.parse([user(1, "go"), assistant(2), dict(self.ENQUEUE), side])
+        self.assertFalse(s.is_complete())
 
 
 class WidthTests(unittest.TestCase):

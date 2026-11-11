@@ -98,9 +98,14 @@ loose. All three go through `mutate_goals`, so a corrupt store refuses them.
 Hidden panes are reaped only when their latest assistant message has a terminal
 stop reason (`stop`, `error`, `aborted` for Pi; `end_turn`, `stop_sequence`,
 `max_tokens`, `refusal` for Claude Code) for the full grace period and the
-session has no open background tasks (Claude Code: announced in tool results,
-closed by `<task-notification>` task ids), or when no descendant agent process
-is left. Switching away never force-reaps from a file
+session has no open background runs (Claude Code: launches and `SendMessage`
+resumes announced in tool results, closed by `<task-notification>` matching
+`<tool-use-id>` or, without one, an earlier `<task-id>` run; interim
+"waiting on its own background work" notifications close nothing) and no input
+enqueued and not yet dequeued, removed, or answered by a main-thread assistant
+entry, or when no descendant agent process
+is left (a run that only ever got an interim notification stays open until
+then). Switching away never force-reaps from a file
 read alone: the JSONL can lag the process. Visible panes are never auto-reaped.
 Quitting only detaches. `q`, Ctrl-C, Ctrl-C in the delete prompt and Ctrl-C in
 the harness picker all call `detach_panel()`, which runs `tmux detach-client -s
