@@ -28,7 +28,9 @@ between groups.
   items in *tiers*: `SESSION_LIMIT` (5) at level 0, then doubling caps from
   there (`base * (2**(level + 1) - 1)` → 15, 35, 75…) before a `more` row. A goal
   lists its sessions the same way from `GOAL_SESSION_LIMIT` (3 → 9, 21…). The
-  heading keeps the full session count: `▾ root  (22)`.
+  heading keeps the full session count: `▾ root  (22)`. A collapsed heading
+  puts its worst descendant mark after the count, `▸ root  (22) ●`; an expanded
+  heading has no mark because its rows carry their own.
 - `expanded` maps a container key to its tier level: a project cwd for a
   project `more` row, a goal id for a `goal_more` row, and a slice id for a
   `slice_more` row. Goal children page from `GOAL_SESSION_LIMIT` (3 → 9, 21…) and
@@ -76,7 +78,8 @@ neighbourhood highlighted instead of jumping to the top.
 `tests/test_selection.py` covers the limit, the `more`/`show fewer` label, live
 sessions past the limit, filter and collapse interaction, canonical-name
 uniqueness (including `root`), and the single gap between projects.
-`tests/test_goals.py` covers tier boundaries and payloads, and
+`tests/test_goals.py` covers tier boundaries and payloads, the
+collapsed-project rollup, and
 `tests/test_goal_lifecycle.py` drives the `[`/`]`/`h`/`l`/`Enter` dispatch
 through `main_curses`. When adding a new row kind, handle it in `row_key()`,
 `cursor_for_key()`, `build_lines()` and `draw()` — the four places that switch

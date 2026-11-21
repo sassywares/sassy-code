@@ -2352,18 +2352,25 @@ def goal_subtree_members(
     return sorted(found.values(), key=lambda s: s.last_ts, reverse=True)
 
 
+def worst_mark(sessions) -> str:
+    """The worst status mark among *sessions*: `✗` > `●` > `◐` (D15)."""
+    statuses = {s.status for s in sessions}
+    for status in ("error", "in_progress", "needs_input"):
+        if status in statuses:
+            return STATUS[status][0]
+    return ""
+
+
 def goal_rollup(
     g: Group, goal: Goal, members: list[Session] | None = None
 ) -> str:
     """The node's rollup marks: `✗` > `●` > `◐`, plus `✓` when done (D15)."""
     if members is None:
         members = goal_subtree_members(g, goal)
-    statuses = {s.status for s in members}
     marks = []
-    for status in ("error", "in_progress", "needs_input"):
-        if status in statuses:
-            marks.append(STATUS[status][0])
-            break
+    worst = worst_mark(members)
+    if worst:
+        marks.append(worst)
     if goal.done:
         marks.append(STATUS["done"][0])
     return " ".join(marks)
@@ -4314,11 +4321,46 @@ def build_lines(
             lines.append(("", "gap", -1))
         starts[idx] = len(lines)
         if kind == "group":
-            arrow = "▸" if group_collapsed(g, collapsed, flt) else "▾"
+            closed = group_collapsed(g, collapsed, flt)
+            arrow = "▸" if closed else "▾"
             name = labels.get(g.cwd, g.cwd)
-            label = f"{arrow} {name}  ({len(g.sessions)})"
-            if len(label) > w - 1:
-                label = label[: max(1, w - 2)] + "…"
+            # A collapsed heading rolls up its worst descendant, after the
+            # count, so neither the name nor the count ever shifts. Expanded,
+            # the children carry their own marks and the heading is unchanged.
+            worst = worst_mark(g.sessions) if closed else ""
+            mark_text = f" {worst}" if worst else ""
+            if not mark_text:
+                label = f"{arrow} {name}  ({len(g.sessions)})"
+                if len(label) > w - 1:
+                    label = label[: max(1, w - 2)] + "…"
+            else:
+                count_text = f"  ({len(g.sessions)})"
+                prefix = f"{arrow} "
+                available = max(1, w - 1)
+                # Degrade name -> count -> mark so the mark is the last thing
+                # to go, and the arrow only goes when not even the mark plus
+                # arrow fits.
+                mark = mark_text.strip()
+                room = available - display_width(prefix) - display_width(
+                    count_text + mark_text
+                )
+                if room >= 1:
+                    label = (
+                        prefix + truncate_cols(name, room) + count_text
+                        + mark_text
+                    )
+                elif available - display_width(
+                    prefix
+                ) - display_width(mark_text) >= 1:
+                    room = (
+                        available - display_width(prefix)
+                        - display_width(mark_text)
+                    )
+                    label = prefix + truncate_cols(name, room) + mark_text
+                elif available >= display_width(prefix + mark):
+                    label = prefix + mark
+                else:
+                    label = truncate_cols(mark, available)
             lines.append((label, "group", idx))
         elif kind in ("goal", "slice"):
             closed = goal_collapsed(s, flt)

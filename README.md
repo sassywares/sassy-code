@@ -29,7 +29,9 @@ most recent children — direct sessions and slices counted together — and an
 expanded slice tiers its three most recent sessions. A live in-progress session
 is never hidden behind any of the limits, even when it sits beyond the current
 tier, and a collapsed goal or slice shows its rollup mark when a descendant
-holds one.
+holds one. A collapsed project heading rolls up the same worst descendant status
+(`✗` > `●` > `◐`) after its count; an expanded heading shows no mark, because
+its rows carry their own.
 
 ## Table of contents
 

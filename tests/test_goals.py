@@ -1078,6 +1078,66 @@ class DenseTests(unittest.TestCase):
             hidden[panel.cursor_for_key(hidden, ("more", "/p"))][0], "more"
         )
 
+    def heading(self, g, collapsed=False, w=40):
+        collapsed_set = {"/p"} if collapsed else set()
+        items = list(panel.rows_for([g], "", collapsed_set))
+        lines, _, _ = panel.build_lines(items, w, collapsed_set, "")
+        return lines[0][0]
+
+    def test_collapsed_project_heading_rolls_up_worst_descendant(self):
+        m = [self.sess("m0", 5, running=True), self.sess("m1", 4),
+             self.sess("m2", 3)]
+        gl = goal("g", "G", 1.0, ["m0", "m1", "m2"])
+        g = self.group(m, [gl])
+        self.assertEqual(self.heading(g, True), "▸ p  (3) ●")
+        m[0].status = "needs_input"
+        self.assertEqual(self.heading(g, True), "▸ p  (3) ◐")
+        m[2].status = "error"
+        self.assertEqual(self.heading(g, True), "▸ p  (3) ✗")
+        # Worst-of wins wherever it sits in the project.
+        m[2].status = "idle"
+        m[1].status = "in_progress"
+        self.assertEqual(self.heading(g, True), "▸ p  (3) ●")
+
+    def test_expanded_project_heading_has_no_rollup_mark(self):
+        m = [self.sess("m0", 5, running=True), self.sess("m1", 4)]
+        gl = goal("g", "G", 1.0, ["m0", "m1"])
+        text = self.heading(self.group(m, [gl]), False)
+        self.assertEqual(text, "▾ p  (2)")
+        self.assertNotIn("●", text)
+
+    def test_project_rollup_never_shifts_the_name_or_count(self):
+        m = [self.sess("m0", 5, running=True), self.sess("m1", 4)]
+        gl = goal("g", "G", 1.0, ["m0", "m1"])
+        g = self.group(m, [gl])
+        expanded = self.heading(g, False)
+        closed = self.heading(g, True)
+        self.assertEqual(closed, expanded.replace("▾", "▸", 1) + " ●")
+        self.assertEqual(closed.index("p"), expanded.index("p"))
+        self.assertEqual(closed.index("(2)"), expanded.index("(2)"))
+        # One line at every realistic width: the mark is kept, the name
+        # shrinks, and the count goes before the mark when space runs out.
+        for width in (12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2):
+            narrow = self.heading(g, True, w=width)
+            self.assertIn("●", narrow, (width, narrow))
+            self.assertLessEqual(panel.display_width(narrow), width - 1)
+        self.assertIn("(2)", self.heading(g, True, w=11))
+        self.assertNotIn("(2)", self.heading(g, True, w=10))
+        # The name goes first, then the count, then the arrow. The mark is
+        # the last thing to survive, down to a bare glyph.
+        self.assertIn("p", self.heading(g, True, w=6))
+        self.assertEqual(self.heading(g, True, w=5), "▸ ●")
+        self.assertEqual(self.heading(g, True, w=4), "▸ ●")
+        self.assertEqual(self.heading(g, True, w=3), "●")
+        self.assertEqual(self.heading(g, True, w=2), "●")
+
+    def test_done_sessions_add_no_project_rollup_mark(self):
+        m = [self.sess("m0", 5), self.sess("m1", 4)]
+        m[0].status = "done"
+        m[1].status = "done"
+        gl = goal("g", "G", 1.0, ["m0", "m1"], collapsed=True)
+        gl.done = True
+        self.assertEqual(self.heading(self.group(m, [gl]), True), "▸ p  (2)")
 
 
 def node(gid: str, name: str, created: float, sessions=(), parent="",

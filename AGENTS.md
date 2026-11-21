@@ -106,7 +106,9 @@ row. `goal_roots()`, `goal_children()`, `goal_subtree_goals()`,
 `goal_subtree_members()` and `goal_age_ts()` normalize parent links and
 are cycle-safe; `goal_members()` stays direct sessions only. A goal counts, ages
 and ranks by its whole subtree; a collapsed goal or slice shows the rollup
-`✗` > `●` > `◐`, plus `✓` when that node is done.
+`✗` > `●` > `◐`, plus `✓` when that node is done, and a collapsed project
+heading shows the same worst-descendant mark after its count (an expanded
+heading shows none, because its rows carry their own).
 Empty goals and slices get a sarcastic `hint` line in `build_lines()`. A `hint`
 is a line kind, not a row: it is unselectable. Empty containers in one project
 never share a hint: `goal_hint()` takes them oldest first, each starting at
@@ -380,7 +382,8 @@ release never goes out with the README describing old behavior.
   tier is a no-op, and `more_click_action()` routes a click through the same
   rule. Never hide an `in progress` session: a goal or
   slice holding one counts as in progress at its parent level, and a collapsed
-  container shows its rollup mark after the count. A filter ignores all limits
+  project heading or container shows its rollup mark after the count, so the
+  name never shifts. A filter ignores all limits
   and expands goals and slices. Group headings use `canonical_group_names()`
   (home is `root`, otherwise the folder name), and one blank `gap` line
   separates projects.

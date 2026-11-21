@@ -142,7 +142,8 @@ tier. An in-progress session is never hidden behind either limit.
 sessions of one feature. Two levels: project → goal → **slice** → sessions.
 A goal's count, age and sort position cover its whole subtree; its rollup mark
 is the worst descendant state (`✗` > `●` > `◐`) when collapsed, with `✓` when
-the goal itself is done. Goals expand and collapse like a project and persist in
+the goal itself is done. A collapsed project heading rolls up the same worst
+descendant mark after its count. Goals expand and collapse like a project and persist in
 `goals.json` under the state directory, with an optional `parent` (missing or
 unknown means top-level). Panel state only: Pi and Claude Code never know about
 goals. An empty goal shows a dim hint line that is not a cursor stop. *Avoid:
