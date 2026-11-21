@@ -2,20 +2,17 @@
 """Session parsing tests: UTC timestamps and in-process session switches."""
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-ROOT = Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("sassy_code_panel", ROOT / "panel.py")
-panel = importlib.util.module_from_spec(SPEC)
-sys.modules["sassy_code_panel"] = panel
-SPEC.loader.exec_module(panel)
+from tests.panel_loader import load_panel
+
+panel = load_panel()
 
 
 def session(
@@ -358,9 +355,9 @@ class CacheTests(unittest.TestCase):
                     },
                 }) + "\n"
             )
-            with mock.patch.object(panel.time, "time", return_value=base + 10):
+            with mock.patch.object(time, "time", return_value=base + 10):
                 first = panel.read_session(str(path), "pi")
-            with mock.patch.object(panel.time, "time", return_value=base + 1000):
+            with mock.patch.object(time, "time", return_value=base + 1000):
                 second = panel.read_session(str(path), "pi")
             # Without a live process a terminal turn is idle at any age; the
             # cache must not invent an "active" window from the clock.

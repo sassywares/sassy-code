@@ -2,16 +2,12 @@
 """Tests for external `/reload` dispatch and the wrapping footer."""
 from __future__ import annotations
 
-import importlib.util
-import sys
 import unittest
-from pathlib import Path
+from unittest import mock
 
-ROOT = Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("sassy_code_panel", ROOT / "panel.py")
-panel = importlib.util.module_from_spec(SPEC)
-sys.modules["sassy_code_panel"] = panel
-SPEC.loader.exec_module(panel)
+from tests.panel_loader import load_panel
+
+panel = load_panel()
 
 
 def proc(pid: int, ppid: int, command: str) -> panel.Proc:
@@ -57,6 +53,19 @@ class ReloadTests(unittest.TestCase):
         self.assertEqual(count, 2)
         self.assertEqual(sent, ["%1", "%3"])
 
+    def test_reload_snapshot_comes_from_owning_module(self):
+        calls = []
+
+        def snapshot(*args, **kwargs):
+            calls.append((args, kwargs))
+            return []
+
+        with mock.patch.object(panel.procs, "process_table", snapshot):
+            count = panel.reload_managed_panes([], procs=None, panes=[])
+
+        self.assertEqual(count, 0)
+        self.assertEqual(len(calls), 1)
+
     def test_reload_counts_only_successful_sends(self):
         sent = []
 
@@ -73,16 +82,16 @@ class ReloadTests(unittest.TestCase):
 
 class FooterTests(unittest.TestCase):
     def test_narrow_footer_wraps_without_dropping_bindings(self):
-        lines = panel.footer_lines(panel.FOOTER_ITEMS, 26)
+        lines = panel.footer_lines(panel.view.FOOTER_ITEMS, 26)
         self.assertGreater(len(lines), 1)
         for line in lines:
             self.assertLessEqual(len(line), 25)
         rendered = "  ".join(lines)
-        for item in panel.FOOTER_ITEMS:
+        for item in panel.view.FOOTER_ITEMS:
             self.assertIn(item, rendered)
 
     def test_wide_footer_is_one_line(self):
-        lines = panel.footer_lines(panel.FOOTER_ITEMS, 200)
+        lines = panel.footer_lines(panel.view.FOOTER_ITEMS, 200)
         self.assertEqual(len(lines), 1)
 
 

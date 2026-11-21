@@ -27,7 +27,7 @@ class GoalStoreCase(unittest.TestCase):
             ("STATE_DIR", str(Path(self.tmpdir.name) / "state")),
             ("_goals_cache", None),
         ):
-            patcher = mock.patch.object(panel, name, value)
+            patcher = mock.patch.object(panel.state, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        self.file = Path(panel.STATE_DIR) / "goals.json"
+        self.file = Path(panel.state.STATE_DIR) / "goals.json"

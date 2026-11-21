@@ -29,7 +29,7 @@ opposite gap: its activation always ran "reveal", even when its own label said
 
 ## Solution
 
-`set_tier(row, action)` (`panel.py:4868`) treats both keys as one level per
+`App.set_tier()` (`panel.main`) treats both keys as one level per
 press, on any row that owns a container:
 
 - `show` (`]`/`l`/`→`): expand a collapsed container at the base tier (dropping
@@ -37,12 +37,12 @@ press, on any row that owns a container:
 - `hide` (`[`/`h`/`←`): at a raised tier `tier_hide()`; at the base tier there
   is no tier left to hide, so collapse the container.
 - `toggle` (Enter/click): flip a container; on a `more` row follow its label.
-  `more_click_action(row)` (`panel.py:4151`) returns `"hide"` when the row is
+  `more_click_action(row)` (`panel.mouse`) returns `"hide"` when the row is
   already `… show fewer`, `"show"` otherwise.
 
 Two supporting rules make the single step feel right:
 
-- `tier_reveal()` (`panel.py:3628`) advances the stored level until the hidden
+- `tier_reveal()` (`panel.rows`) advances the stored level until the hidden
   count actually drops. In-progress sessions are pulled past the cap, so a tier
   whose cap adds no new row would otherwise consume a press and look inert; it
   skips those levels instead, then lands on the first newly added row.

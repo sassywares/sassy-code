@@ -33,7 +33,7 @@ like intermittent curses input loss while `j`/`k` worked.
 window follows a pane switch:
 
 ```bash
-# main:22-27
+# main: ensure_pane_keys
 for key in Up Down Left Right; do
   dir="${key:0:1}"   # Up→U, Down→D, Left→L, Right→R
   binding="$(tmux list-keys -T prefix -F '#{key_repeat} #{key_command}' "$key" 2>/dev/null || true)"
@@ -46,12 +46,12 @@ done
 The guard matters: only a binding that is both repeatable and exactly
 `select-pane -<dir>` is rewritten, so a user's custom prefix-arrow binding is
 left alone. A user binding that is byte-identical to tmux's default cannot be
-told apart and will be normalized (README:69).
+told apart and will be normalized (`README.md` § Quick start says the same).
 
-Configuration is applied by `ensure_tmux_config` (main:31) only once a tmux
+Configuration is applied by `ensure_tmux_config` only once a tmux
 server exists, before both the switch-client path and `attach` on a fresh
-server (main:71). The cold-start path needs `start-server \; set-option -g
-exit-empty off` (main:36-48) because `start-server` exits immediately when there
+server (the launcher dispatch block). The cold-start path needs `start-server \; set-option -g
+exit-empty off` (the `SASSY_CODE_TMUX_CONFIG_ONLY` cold-start block) because `start-server` exits immediately when there
 are no sessions, which would discard the new bindings.
 
 ## Prevention
@@ -62,9 +62,9 @@ intent of the code. It checks each arrow reports `0 select-pane -<dir>` via
 regressions that matter:
 
 - **Cold start** — no server, session, or user config; the launcher must still
-  apply the bindings (scenario 1, tests/tmux-pane-keys.sh:58).
+  apply the bindings (scenario 1).
 - **Custom bindings** — a repeatable, non-default prefix binding must survive
-  unchanged (scenario 2, tests/tmux-pane-keys.sh:83).
+  unchanged (scenario 2).
 
 When debugging keys that vanish only right after a pane switch, inspect the
 binding before suspecting the TUI: `tmux list-keys -T prefix Up` prints the

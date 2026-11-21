@@ -35,12 +35,12 @@ was applied as a fresh step.
 
 ## Solution
 
-- `MOUSE_WHEEL_UP`/`MOUSE_WHEEL_DOWN` (`panel.py:86`) are built only from
+- `MOUSE_WHEEL_UP`/`MOUSE_WHEEL_DOWN` (`panel.core`) are built only from
   `BUTTON4_*`/`BUTTON5_*` via `getattr`, so a 4-button build yields a zero
   wheel-down mask and wheel-down is inert rather than guessed.
-- `mouse_kind()` (`panel.py:3978`) tests those masks only. No modifier bit is
+- `mouse_kind()` (`panel.mouse`) tests those masks only. No modifier bit is
   ever classified as a wheel; an unclassified event is `""` and ignored.
-- `wheel_notch()` (`panel.py:4028`) debounces a same-direction event inside
+- `wheel_notch()` (`panel.mouse`) debounces a same-direction event inside
   `WHEEL_DEBOUNCE_SECONDS` (0.05 s): it updates the clock but reports not-fresh,
   so a press/click pair is one step. A direction change is always fresh, so
   reversing the wheel is never swallowed.

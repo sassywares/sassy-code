@@ -2,6 +2,7 @@
 """P5 move-session store, box and row tests."""
 from __future__ import annotations
 
+import curses
 import json
 import os
 import unicodedata
@@ -102,7 +103,7 @@ class MoveStoreTests(MoveCase):
     def test_corrupt_store_refuses_and_leaves_file_byte_identical(self):
         self.file.write_text("{ not json")
         before = self.file.read_bytes()
-        panel._goals_cache = None
+        panel.state._goals_cache = None
         with self.assertRaises(panel.GoalStoreError):
             panel.move_session("/p", "a", self.goal.id)
         self.assertEqual(self.file.read_bytes(), before)
@@ -131,7 +132,7 @@ class MoveStoreTests(MoveCase):
             ]},
         }
         self.file.write_text(json.dumps(data))
-        panel._goals_cache = None
+        panel.state._goals_cache = None
         goals, unreadable = panel.load_goals()
         self.assertFalse(unreadable)
         self.assertEqual(goals["/p"][0].sessions, [])
@@ -267,6 +268,29 @@ class MoveRowTests(MoveCase):
         )
 
 
+class MoveKeyTests(MoveCase):
+    """`m` dispatch keeps the panel's pane target (P6 F1)."""
+
+    def test_move_pick_keeps_the_panel_target(self):
+        app = panel.main.App(mock.Mock(), "%2")
+        app.groups = [self.group]
+        with mock.patch.object(panel.view, "draw", return_value=(0, 0, {})):
+            app.draw()  # the loop always draws before a key arrives
+        app.cursor = next(
+            i for i, row in enumerate(app.rows)
+            if row[0] == "session" and row[2].id == "a"
+        )
+        with mock.patch.object(
+            panel.boxes, "move_box",
+            return_value=(panel.MOVE_GOAL, self.goal),
+        ), mock.patch.object(
+            panel.status, "load_groups", return_value=[self.group]
+        ):
+            self.assertTrue(app.dispatch_key(ord("m"), {}))
+        self.assertEqual(app.target, "%2")
+        self.assertIn("a", self.members(self.goal.id))
+
+
 class MoveBoxTests(MoveCase):
     def test_targets_list_top_level_new_goal_then_the_tree(self):
         targets = panel.move_targets(self.group)
@@ -383,7 +407,7 @@ class MoveBoxTests(MoveCase):
             if goal is not None and goal.id == self.slice.id
         )
         attr = panel.move_box_line_attr(state, slice_index)
-        self.assertTrue(attr & panel.curses.A_DIM)
+        self.assertTrue(attr & curses.A_DIM)
         self.assertNotIn("✓", lines[4])
 
     def test_keys_move_pick_and_cancel(self):
@@ -445,7 +469,7 @@ class MoveBoxTests(MoveCase):
     def test_box_cancels_when_there_are_no_lines(self):
         scr = mock.Mock()
         scr.getmaxyx.return_value = (24, 30)
-        with mock.patch.object(panel.curses, "newwin") as nw:
+        with mock.patch.object(curses, "newwin") as nw:
             result = panel.run_picker(
                 scr, {}, "move", lambda state: ([], 0),
                 lambda state, ch: (state, None), None,
@@ -454,15 +478,14 @@ class MoveBoxTests(MoveCase):
         nw.assert_not_called()
 
     def test_box_cancels_when_it_cannot_draw(self):
-        import curses
         scr = mock.Mock()
         scr.getmaxyx.return_value = (24, 30)
-        with mock.patch.object(panel.curses, "newwin", side_effect=curses.error):
+        with mock.patch.object(curses, "newwin", side_effect=curses.error):
             result = panel.move_box(scr, self.group, self.a)
         self.assertIsNone(result)
         scr.getch.assert_not_called()
         scr.getmaxyx.return_value = (2, 4)  # too small for any box
-        with mock.patch.object(panel.curses, "newwin") as nw:
+        with mock.patch.object(curses, "newwin") as nw:
             result = panel.move_box(scr, self.group, self.a)
         self.assertIsNone(result)
         nw.assert_not_called()
@@ -493,7 +516,7 @@ class MoveBoxRenderTests(GoalStoreCase):
         scr.getmaxyx.return_value = size
         win = mock.Mock()
         win.getch.side_effect = [27]
-        with mock.patch.object(panel.curses, "newwin", return_value=win) as nw:
+        with mock.patch.object(curses, "newwin", return_value=win) as nw:
             panel.move_box(scr, self.group, self.a)
         calls = win.addnstr.call_args_list[1:]  # call 0 is the title row
         return [c.args[2] for c in calls], nw.call_args.args[1]
@@ -588,15 +611,15 @@ class MoveBoxRenderTests(GoalStoreCase):
         }
         self.assertTrue(
             panel.move_box_line_attr(state, indices[self.goal_b.id])
-            & panel.curses.A_DIM
+            & curses.A_DIM
         )
         self.assertTrue(
             panel.move_box_line_attr(state, indices[self.slice_a2.id])
-            & panel.curses.A_DIM
+            & curses.A_DIM
         )
         self.assertFalse(
             panel.move_box_line_attr(state, indices[self.goal_a.id])
-            & panel.curses.A_DIM
+            & curses.A_DIM
         )
         self.assertNotIn("✓", lines[6])
         self.assertNotIn("✓", lines[7])

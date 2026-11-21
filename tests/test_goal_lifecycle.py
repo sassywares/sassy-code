@@ -2,6 +2,8 @@
 """Goal rename, done and delete tests."""
 from __future__ import annotations
 
+import curses
+import os
 import unittest
 from unittest import mock
 
@@ -129,7 +131,7 @@ class DoneTests(LifecycleCase):
     def test_persists_across_reload(self):
         groups, (a, _) = self.make()
         panel.done_goal(groups, self.row(groups, a))
-        panel._goals_cache = None
+        panel.state._goals_cache = None
         goals, bad = panel.load_goals()
         self.assertFalse(bad)
         self.assertTrue(goals["/p"][0].done)
@@ -179,7 +181,7 @@ class DoneTests(LifecycleCase):
     def test_list_shows_check(self):
         groups, (a, _) = self.make(members={0: [("a1", 10.0)]})
         panel.done_goal(groups, self.row(groups, a))
-        self.assertRegex("\n".join(panel.list_lines(groups)), r"(?m)^  ✓ A  \(1\)$")
+        self.assertRegex("\n".join(panel.main.list_lines(groups)), r"(?m)^  ✓ A  \(1\)$")
 
     def test_non_goal_row_refused(self):
         groups, _ = self.make(loose_ts=(5.0,))
@@ -238,18 +240,18 @@ class LoopCase(LifecycleCase):
         scr = mock.Mock()
         scr.getch.side_effect = getch
         scr.getmaxyx.return_value = (24, 40)
-        with mock.patch.object(panel.curses, "curs_set"), \
-                mock.patch.object(panel.curses, "start_color"), \
-                mock.patch.object(panel.curses, "use_default_colors"), \
-                mock.patch.object(panel.curses, "init_pair"), \
-                mock.patch.object(panel, "load_groups", return_value=groups), \
-                mock.patch.object(panel, "set_panel_tag"), \
-                mock.patch.object(panel, "panel_pane_id", return_value=pane), \
-                mock.patch.object(panel, "migrate_state"), \
-                mock.patch.object(panel, "_read_state", return_value="x"), \
-                mock.patch.object(panel, "draw", draw), \
-                mock.patch.object(panel, "detach_panel", detach):
-            return panel.main_curses(scr, "%2")
+        with mock.patch.object(curses, "curs_set"), \
+                mock.patch.object(curses, "start_color"), \
+                mock.patch.object(curses, "use_default_colors"), \
+                mock.patch.object(curses, "init_pair"), \
+                mock.patch.object(panel.status, "load_groups", return_value=groups), \
+                mock.patch.object(panel.tmuxctl, "set_panel_tag"), \
+                mock.patch.object(panel.tmuxctl, "panel_pane_id", return_value=pane), \
+                mock.patch.object(panel.state, "migrate_state"), \
+                mock.patch.object(panel.state, "_read_state", return_value="x"), \
+                mock.patch.object(panel.view, "draw", draw), \
+                mock.patch.object(panel.actions, "detach_panel", detach):
+            return panel.main.main_curses(scr, "%2")
 
 
 class TierKeyTests(LoopCase):
@@ -356,7 +358,7 @@ class TierKeyTests(LoopCase):
         """Empty the goal store so each level case starts from one goal."""
         self.file.parent.mkdir(parents=True, exist_ok=True)
         self.file.write_text('{"version": 1, "projects": {}}')
-        panel._goals_cache = None
+        panel.state._goals_cache = None
 
     def slice_group(self, count=5):
         groups, _ = self.make(
@@ -425,7 +427,7 @@ class TierKeyTests(LoopCase):
         # The hide that removed the last tier lands on the `more` row; `[`
         # there must fall through to collapsing the container it belongs to.
         for level in ("project", "goal", "slice"):
-            for key in (ord("["), ord("h"), panel.curses.KEY_LEFT):
+            for key in (ord("["), ord("h"), curses.KEY_LEFT):
                 with self.subTest(level=level, key=key):
                     groups, _key, tier, index = self.level_case(level)
                     rows = self.rows(groups)
@@ -510,7 +512,7 @@ class TierKeyTests(LoopCase):
             snaps.append((flt, dict(expanded)))
             return cursor, offset
 
-        with mock.patch.object(panel, "prompt_line", return_value="l"):
+        with mock.patch.object(panel.actions, "prompt_line", return_value="l"):
             with self.assertRaises(SystemExit):
                 self.run_loop(
                     groups,
@@ -583,7 +585,7 @@ class TierKeyTests(LoopCase):
 class CtrlCTests(LoopCase):
     def setUp(self):
         super().setUp()
-        env = mock.patch.dict(panel.os.environ, {"TMUX": "/x,1,0"})
+        env = mock.patch.dict(os.environ, {"TMUX": "/x,1,0"})
         env.start()
         self.addCleanup(env.stop)
 
@@ -603,20 +605,20 @@ class CtrlCTests(LoopCase):
         scr.getch.side_effect = getch
         scr.getmaxyx.return_value = (24, 40)
         detach = mock.Mock(return_value="")
-        with mock.patch.object(panel.curses, "curs_set"), \
-                mock.patch.object(panel.curses, "start_color"), \
-                mock.patch.object(panel.curses, "use_default_colors"), \
-                mock.patch.object(panel.curses, "init_pair"), \
-                mock.patch.object(panel, "load_groups", return_value=groups), \
-                mock.patch.object(panel, "set_panel_tag"), \
-                mock.patch.object(panel, "panel_pane_id", return_value="%1"), \
-                mock.patch.object(panel, "migrate_state"), \
-                mock.patch.object(panel, "_read_state", return_value="x"), \
-                mock.patch.object(panel, "draw", return_value=(1, 0)) as draw, \
-                mock.patch.object(panel, "detach_panel", detach), \
-                mock.patch.object(panel, "tmux") as tmux:
+        with mock.patch.object(curses, "curs_set"), \
+                mock.patch.object(curses, "start_color"), \
+                mock.patch.object(curses, "use_default_colors"), \
+                mock.patch.object(curses, "init_pair"), \
+                mock.patch.object(panel.status, "load_groups", return_value=groups), \
+                mock.patch.object(panel.tmuxctl, "set_panel_tag"), \
+                mock.patch.object(panel.tmuxctl, "panel_pane_id", return_value="%1"), \
+                mock.patch.object(panel.state, "migrate_state"), \
+                mock.patch.object(panel.state, "_read_state", return_value="x"), \
+                mock.patch.object(panel.view, "draw", return_value=(1, 0)) as draw, \
+                mock.patch.object(panel.actions, "detach_panel", detach), \
+                mock.patch.object(panel.tmuxctl, "tmux") as tmux:
             with self.assertRaises(SystemExit):
-                panel.main_curses(scr, "%2")
+                panel.main.main_curses(scr, "%2")
         self.assertTrue(
             any("Delete goal" in str(c.args[6]) for c in draw.call_args_list)
         )
@@ -646,8 +648,8 @@ class CtrlCTests(LoopCase):
         groups, _ = self.make(("A",))
         for key in (ord("q"), KeyboardInterrupt):
             detach = mock.Mock(return_value="")
-            with mock.patch.dict(panel.os.environ, {}, clear=False):
-                panel.os.environ.pop("TMUX", None)
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("TMUX", None)
                 # A tmux server may be running: its pane must not matter.
                 self.run_loop(
                     groups, [key], mock.Mock(return_value=(0, 0)), detach,
@@ -657,9 +659,9 @@ class CtrlCTests(LoopCase):
 
     def test_outside_tmux_runs_no_detach_command(self):
         groups, _ = self.make(("A",))
-        with mock.patch.dict(panel.os.environ, {}, clear=False), \
-                mock.patch.object(panel, "tmux") as tmux:
-            panel.os.environ.pop("TMUX", None)
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(panel.tmuxctl, "tmux") as tmux:
+            os.environ.pop("TMUX", None)
             self.run_loop(
                 groups, [ord("q")], mock.Mock(return_value=(0, 0)),
                 panel.detach_panel, pane="%0",
@@ -670,11 +672,11 @@ class CtrlCTests(LoopCase):
     def test_failed_pane_read_inside_tmux_keeps_running_then_recovers(self):
         groups, _ = self.make(("A",))
         draw = mock.Mock(return_value=(0, 0))
-        with mock.patch.dict(panel.os.environ, {"TMUX": "/x,1,0"}), \
+        with mock.patch.dict(os.environ, {"TMUX": "/x,1,0"}), \
                 mock.patch.object(
-                    panel, "panel_pane_id", side_effect=["%1", "", "%1"]
+                    panel.tmuxctl, "panel_pane_id", side_effect=["%1", "", "%1"]
                 ), \
-                mock.patch.object(panel, "tmux") as tmux:
+                mock.patch.object(panel.tmuxctl, "tmux") as tmux:
             tmux.return_value = mock.Mock(returncode=0, stdout="s\n")
             keys = iter([ord("q"), ord("q"), SystemExit])
 
@@ -687,17 +689,17 @@ class CtrlCTests(LoopCase):
             scr = mock.Mock()
             scr.getch.side_effect = getch
             scr.getmaxyx.return_value = (24, 40)
-            with mock.patch.object(panel.curses, "curs_set"), \
-                    mock.patch.object(panel.curses, "start_color"), \
-                    mock.patch.object(panel.curses, "use_default_colors"), \
-                    mock.patch.object(panel.curses, "init_pair"), \
-                    mock.patch.object(panel, "load_groups", return_value=groups), \
-                    mock.patch.object(panel, "set_panel_tag"), \
-                    mock.patch.object(panel, "migrate_state"), \
-                    mock.patch.object(panel, "_read_state", return_value="x"), \
-                    mock.patch.object(panel, "draw", draw):
+            with mock.patch.object(curses, "curs_set"), \
+                    mock.patch.object(curses, "start_color"), \
+                    mock.patch.object(curses, "use_default_colors"), \
+                    mock.patch.object(curses, "init_pair"), \
+                    mock.patch.object(panel.status, "load_groups", return_value=groups), \
+                    mock.patch.object(panel.tmuxctl, "set_panel_tag"), \
+                    mock.patch.object(panel.state, "migrate_state"), \
+                    mock.patch.object(panel.state, "_read_state", return_value="x"), \
+                    mock.patch.object(panel.view, "draw", draw):
                 with self.assertRaises(SystemExit):
-                    panel.main_curses(scr, "%2")
+                    panel.main.main_curses(scr, "%2")
         self.assertEqual(draw.call_args_list[1].args[6], panel.DETACH_FAILED)
         self.assertTrue(
             any("detach-client" in c.args for c in tmux.call_args_list)
@@ -711,9 +713,11 @@ class CtrlCTests(LoopCase):
             detach = mock.Mock(return_value="")
             # group, goal, member: j j lands on the session row.
             keys = [ord("j"), ord("j"), key, SystemExit]
-            with mock.patch.dict(panel.os.environ, {"TMUX": "/x,1,0"}), \
-                    mock.patch.object(panel, target, side_effect=KeyboardInterrupt), \
-                    mock.patch.object(panel, "installed_harnesses", return_value=["pi"]):
+            with mock.patch.dict(os.environ, {"TMUX": "/x,1,0"}), \
+                    mock.patch.object(panel.actions, target, side_effect=KeyboardInterrupt), \
+                    mock.patch.object(
+                        panel.panes, "installed_harnesses", return_value=["pi"]
+                    ):
                 with self.assertRaises(SystemExit):
                     self.run_loop(
                         groups, keys,
@@ -727,11 +731,11 @@ class CtrlCTests(LoopCase):
         new_session = mock.Mock(return_value=None)
         win = mock.Mock()
         win.getch.side_effect = KeyboardInterrupt  # ISIG: no key reaches us
-        with mock.patch.object(panel.curses, "newwin", return_value=win), \
+        with mock.patch.object(curses, "newwin", return_value=win), \
                 mock.patch.object(
-                    panel, "installed_harnesses", return_value=["pi", "claude"]
+                    panel.panes, "installed_harnesses", return_value=["pi", "claude"]
                 ), \
-                mock.patch.object(panel, "new_session", new_session):
+                mock.patch.object(panel.actions, "new_session", new_session):
             with self.assertRaises(SystemExit):
                 self.run_loop(
                     groups, [ord("n"), SystemExit],
@@ -748,9 +752,9 @@ class CtrlCTests(LoopCase):
         new_goal = mock.Mock()
         win = mock.Mock()
         win.getch.side_effect = KeyboardInterrupt  # ISIG: no key reaches us
-        with mock.patch.object(panel.curses, "newwin", return_value=win), \
-                mock.patch.object(panel, "move_session_row", move_row), \
-                mock.patch.object(panel, "move_to_new_goal", new_goal):
+        with mock.patch.object(curses, "newwin", return_value=win), \
+                mock.patch.object(panel.actions, "move_session_row", move_row), \
+                mock.patch.object(panel.actions, "move_to_new_goal", new_goal):
             with self.assertRaises(SystemExit):
                 # group, goal, member: j j lands on the session row.
                 self.run_loop(
@@ -769,12 +773,12 @@ class CtrlCTests(LoopCase):
         detach = mock.Mock(return_value="")
         new_session = mock.Mock(return_value=None)
         with mock.patch.object(
-                    panel, "new_box_lines", side_effect=KeyboardInterrupt
+                    panel.boxes, "new_box_lines", side_effect=KeyboardInterrupt
                 ), \
                 mock.patch.object(
-                    panel, "installed_harnesses", return_value=["pi", "claude"]
+                    panel.panes, "installed_harnesses", return_value=["pi", "claude"]
                 ), \
-                mock.patch.object(panel, "new_session", new_session):
+                mock.patch.object(panel.actions, "new_session", new_session):
             with self.assertRaises(SystemExit):
                 self.run_loop(
                     groups, [ord("n"), SystemExit],
@@ -803,11 +807,11 @@ class NewBoxLoopTests(LoopCase):
         ]
         prompts = prompts if prompts is not None else ["New goal"]
         context = [
-            mock.patch.object(panel, "new_box", side_effect=box),
-            mock.patch.object(panel, "prompt_line", side_effect=prompts),
-            mock.patch.object(panel, "new_session", new_session),
+            mock.patch.object(panel.boxes, "new_box", side_effect=box),
+            mock.patch.object(panel.actions, "prompt_line", side_effect=prompts),
+            mock.patch.object(panel.actions, "new_session", new_session),
             mock.patch.object(
-                panel, "installed_harnesses", return_value=["pi", "claude"]
+                panel.panes, "installed_harnesses", return_value=["pi", "claude"]
             ),
         ]
         for patcher in context:
@@ -876,10 +880,10 @@ class TinyScreenTests(LifecycleCase):
 
             def strict(y, x, text, n, attr=0, size=size):
                 if not 0 <= y < size[0]:
-                    raise panel.curses.error("off screen")
+                    raise curses.error("off screen")
 
             scr.addnstr.side_effect = strict
-            with mock.patch.object(panel.curses, "color_pair", return_value=0):
+            with mock.patch.object(curses, "color_pair", return_value=0):
                 panel.draw(scr, groups, "", 0, 0, set())
 
 
@@ -888,7 +892,7 @@ class CorruptTests(LifecycleCase):
         groups, (a, _) = self.make()
         row = self.row(groups, a)
         self.file.write_text("{ not json")
-        panel._goals_cache = None
+        panel.state._goals_cache = None
         self.assertEqual(panel.rename_prefill(row)[0], "")
         self.assertIn("unreadable", panel.rename_prefill(row)[1])
         self.assertEqual(panel.delete_prompt(row)[0], "")
@@ -1072,7 +1076,7 @@ class SliceLifecycleTests(GoalStoreCase):
 
     def test_corrupt_store_refuses_slice_actions(self):
         self.file.write_text("{ not json")
-        panel._goals_cache = None
+        panel.state._goals_cache = None
         row = self.row(self.slice.id)
         self.assertEqual(panel.rename_prefill(row)[0], "")
         self.assertIn("unreadable", panel.rename_prefill(row)[1])

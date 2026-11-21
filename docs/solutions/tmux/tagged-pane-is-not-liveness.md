@@ -22,13 +22,13 @@ in the same way.
 
 The obvious fix — require an agent in the pane's process subtree — has a trap:
 `process_table()` returns `[]` on any `ps` failure or timeout
-(`panel.py:832`). Read literally, an empty snapshot means "no agent anywhere",
+(`panel.procs`). Read literally, an empty snapshot means "no agent anywhere",
 which would flip every working session to idle and reap every hidden pane in
 one bad refresh.
 
 ## Solution
 
-One shared predicate, `pane_is_live()` (`panel.py:1321`), used by every caller
+One shared predicate, `pane_is_live()` (`panel.panes`), used by every caller
 that needs the answer:
 
 ```python
@@ -42,8 +42,8 @@ def pane_is_live(pane, procs):
 The empty-snapshot case deliberately falls back to the tag: a failed snapshot is
 *unknown*, and the conservative answer is the old tag-only one. All three call
 sites consume this function — the live set via `pane_live_session()`
-(`panel.py:1361`), `reap_hidden()` (`panel.py:1526`) and `present_session()`
-(`panel.py:3299`, which replaces a leftover shell instead of presenting it).
+(`panel.panes`), `reap_hidden()` (`panel.panes`) and `present_session()`
+(`panel.actions`, which replaces a leftover shell instead of presenting it).
 
 ## Prevention
 

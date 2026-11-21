@@ -26,12 +26,12 @@ run, not by inference from the transcript shape.
 
 ## Solution
 
-`pending_turn()` (`panel.py:744`) reads only the turn itself: no messages means
+`pending_turn()` (`panel.status`) reads only the turn itself: no messages means
 not pending, an unanswered `AskUserQuestion` means blocked rather than working,
 a trailing user/tool-result means in progress, and anything but a terminal stop
 reason means in progress. `open_tasks` and `queued_input` are not mentioned.
 
-That bookkeeping stays in `is_complete()` (`panel.py:168`), whose job is
+That bookkeeping stays in `Session.is_complete()` (`panel.core`), whose job is
 reaping, not status: it returns `False` while a background run or queued input
 is outstanding, so a hidden pane is never reaped out from under live work. The
 two questions get two different answers from two different functions.

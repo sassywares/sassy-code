@@ -24,6 +24,9 @@ panel = load_panel()
 
 
 SESSION_NAME = "sassy-code"  # the dedicated session the launcher owns
+PANEL_ARGV = (sys.executable, "-m", "panel")
+PANEL_ROOT = str(ROOT)
+PANEL_PYTHONPATH = f"PYTHONPATH={PANEL_ROOT}"
 
 
 class BackgroundLifecycleTests(unittest.TestCase):
@@ -31,7 +34,7 @@ class BackgroundLifecycleTests(unittest.TestCase):
 
     def setUp(self):
         BackgroundLifecycleTests.counter += 1
-        panel._ATTENTION.clear()
+        panel.core._ATTENTION.clear()
         self.tmp = Path(tempfile.mkdtemp(prefix="sassy-code-test-"))
         self.sessions = self.tmp / "sessions"
         (self.sessions / "project").mkdir(parents=True)
@@ -96,13 +99,13 @@ class BackgroundLifecycleTests(unittest.TestCase):
         os.environ["TMUX_PANE"] = self.panel_id
         os.environ["PATH"] = f"{self.fake_bin}:{self.old_env['PATH'] or ''}"
         self.tmux("set-environment", "-g", "PATH", os.environ["PATH"])
-        panel.PI_SESSIONS_DIR = str(self.sessions)
-        panel.CLAUDE_SESSIONS_DIR = str(self.claude_sessions)
-        patcher = mock.patch.object(panel, "STATE_DIR", str(self.tmp / "state"))
+        panel.core.PI_SESSIONS_DIR = str(self.sessions)
+        panel.core.CLAUDE_SESSIONS_DIR = str(self.claude_sessions)
+        patcher = mock.patch.object(panel.state, "STATE_DIR", str(self.tmp / "state"))
         patcher.start()
         self.addCleanup(patcher.stop)
-        panel.LEGACY_STATE_FILE = str(self.tmp / "legacy-current")
-        panel.REAP_GRACE = 0.2
+        panel.core.LEGACY_STATE_FILE = str(self.tmp / "legacy-current")
+        panel.core.REAP_GRACE = 0.2
 
     def tearDown(self):
         for proc in self.procs:
@@ -263,8 +266,9 @@ class BackgroundLifecycleTests(unittest.TestCase):
     def run_panel(self, *args: str):
         env = os.environ.copy()
         env["TMUX"] = self.socket
+        env["PYTHONPATH"] = PANEL_ROOT
         return subprocess.run(
-            [sys.executable, str(ROOT / "panel.py"), *args],
+            [*PANEL_ARGV, *args],
             capture_output=True,
             text=True,
             env=env,
@@ -336,7 +340,7 @@ class BackgroundLifecycleTests(unittest.TestCase):
             self.pane_by_id(done_pane),
             "a live displaced pane must not be killed from a stale completion",
         )
-        time.sleep(panel.REAP_GRACE + 0.25)
+        time.sleep(panel.core.REAP_GRACE + 0.25)
         self.reap(state)
         self.assertIsNone(
             self.pane_by_id(done_pane),
@@ -364,7 +368,7 @@ class BackgroundLifecycleTests(unittest.TestCase):
             "a completed hidden session gets a refresh grace period",
         )
         self.assertIn(a_pane, state)
-        time.sleep(panel.REAP_GRACE + 0.25)
+        time.sleep(panel.core.REAP_GRACE + 0.25)
         self.reap(state)
         self.assertIsNone(
             self.pane_by_id(a_pane),
@@ -637,11 +641,11 @@ class BackgroundLifecycleTests(unittest.TestCase):
     def test_new_session_in_goal_via_n_and_the_shortcut_path(self):
         # The panel process resolves its state dir from HOME.
         self.panel_state = self.tmp / ".sassywares" / "sassy-code"
-        patcher = mock.patch.object(panel, "STATE_DIR", str(self.panel_state))
+        patcher = mock.patch.object(panel.state, "STATE_DIR", str(self.panel_state))
         patcher.start()
         self.addCleanup(patcher.stop)
-        panel._goals_cache = None
-        self.addCleanup(setattr, panel, "_goals_cache", None)
+        panel.state._goals_cache = None
+        self.addCleanup(setattr, panel.state, "_goals_cache", None)
         self.write_session("seed", "stop", offset=-60)
         win = self.tmux(
             "new-window", "-d", "-P", "-F", "#{window_id}",
@@ -657,7 +661,8 @@ class BackgroundLifecycleTests(unittest.TestCase):
             f"PI_CODING_AGENT_SESSION_DIR={self.sessions}",
             f"SASSY_CODE_CLAUDE_SESSION_DIR={self.claude_sessions}",
             "SASSY_CODE_NEW_HARNESS=pi",
-            sys.executable, str(ROOT / "panel.py"), "--target", viewer,
+            PANEL_PYTHONPATH,
+            *PANEL_ARGV, "--target", viewer,
         ).strip()
         os.environ["TMUX_PANE"] = panel_pane
 
@@ -739,11 +744,11 @@ class BackgroundLifecycleTests(unittest.TestCase):
         # session spawns. It does not prove the slice variant (covered by the
         # unit tests) or mouse interaction (P6).
         self.panel_state = self.tmp / ".sassywares" / "sassy-code"
-        patcher = mock.patch.object(panel, "STATE_DIR", str(self.panel_state))
+        patcher = mock.patch.object(panel.state, "STATE_DIR", str(self.panel_state))
         patcher.start()
         self.addCleanup(patcher.stop)
-        panel._goals_cache = None
-        self.addCleanup(setattr, panel, "_goals_cache", None)
+        panel.state._goals_cache = None
+        self.addCleanup(setattr, panel.state, "_goals_cache", None)
         self.write_session("seed", "stop", offset=-60)
         win = self.tmux(
             "new-window", "-d", "-P", "-F", "#{window_id}",
@@ -759,7 +764,8 @@ class BackgroundLifecycleTests(unittest.TestCase):
             f"PI_CODING_AGENT_SESSION_DIR={self.sessions}",
             f"SASSY_CODE_CLAUDE_SESSION_DIR={self.claude_sessions}",
             "SASSY_CODE_NEW_HARNESS=pi",
-            sys.executable, str(ROOT / "panel.py"), "--target", viewer,
+            PANEL_PYTHONPATH,
+            *PANEL_ARGV, "--target", viewer,
         ).strip()
         os.environ["TMUX_PANE"] = panel_pane
 
@@ -821,7 +827,8 @@ class BackgroundLifecycleTests(unittest.TestCase):
             f"PI_CODING_AGENT_SESSION_DIR={self.sessions}",
             f"SASSY_CODE_CLAUDE_SESSION_DIR={self.claude_sessions}",
             "SASSY_CODE_NEW_HARNESS=pi",
-            sys.executable, str(ROOT / "panel.py"), "--target", viewer,
+            PANEL_PYTHONPATH,
+            *PANEL_ARGV, "--target", viewer,
         ).strip()
         os.environ["TMUX_PANE"] = panel_pane
 
@@ -893,11 +900,11 @@ class BackgroundLifecycleTests(unittest.TestCase):
 
     def test_goal_done_and_delete_keys(self):
         self.panel_state = self.tmp / ".sassywares" / "sassy-code"
-        patcher = mock.patch.object(panel, "STATE_DIR", str(self.panel_state))
+        patcher = mock.patch.object(panel.state, "STATE_DIR", str(self.panel_state))
         patcher.start()
         self.addCleanup(patcher.stop)
-        panel._goals_cache = None
-        self.addCleanup(setattr, panel, "_goals_cache", None)
+        panel.state._goals_cache = None
+        self.addCleanup(setattr, panel.state, "_goals_cache", None)
         member = self.write_session("member1", "stop", offset=-10)
         goal = panel.create_goal(str(self.tmp), "Phase work")
         panel.file_session_in_goal(str(self.tmp), goal.id, "member1")
@@ -916,7 +923,8 @@ class BackgroundLifecycleTests(unittest.TestCase):
             f"PI_CODING_AGENT_SESSION_DIR={self.sessions}",
             f"SASSY_CODE_CLAUDE_SESSION_DIR={self.claude_sessions}",
             "SASSY_CODE_NEW_HARNESS=pi",
-            sys.executable, str(ROOT / "panel.py"), "--target", viewer,
+            PANEL_PYTHONPATH,
+            *PANEL_ARGV, "--target", viewer,
         ).strip()
 
         def screen():
@@ -1054,11 +1062,11 @@ class BackgroundLifecycleTests(unittest.TestCase):
     def dedicated_panel(self, goal: bool = False):
         """Run the real panel inside a session named `sassy-code`."""
         self.panel_state = self.tmp / ".sassywares" / "sassy-code"
-        patcher = mock.patch.object(panel, "STATE_DIR", str(self.panel_state))
+        patcher = mock.patch.object(panel.state, "STATE_DIR", str(self.panel_state))
         patcher.start()
         self.addCleanup(patcher.stop)
-        panel._goals_cache = None
-        self.addCleanup(setattr, panel, "_goals_cache", None)
+        panel.state._goals_cache = None
+        self.addCleanup(setattr, panel.state, "_goals_cache", None)
         self.write_session("seed", "stop", offset=-60)
         if goal:
             made = panel.create_goal(str(self.tmp), "Phase work")
@@ -1076,7 +1084,8 @@ class BackgroundLifecycleTests(unittest.TestCase):
             f"PI_CODING_AGENT_SESSION_DIR={self.sessions}",
             f"SASSY_CODE_CLAUDE_SESSION_DIR={self.claude_sessions}",
             "SASSY_CODE_NEW_HARNESS=pi",
-            sys.executable, str(ROOT / "panel.py"), "--target", viewer,
+            PANEL_PYTHONPATH,
+            *PANEL_ARGV, "--target", viewer,
         ).strip()
         self.assertTrue(
             self.wait_until(
@@ -1277,8 +1286,8 @@ class BackgroundLifecycleTests(unittest.TestCase):
             "capture-pane", "-p", "-t", panel_pane))
 
     def test_failed_detach_shows_a_footer_message_and_keeps_running(self):
-        with mock.patch.object(panel, "panel_pane_id", return_value="%0"), \
-                mock.patch.object(panel, "tmux") as fake:
+        with mock.patch.object(panel.tmuxctl, "panel_pane_id", return_value="%0"), \
+                mock.patch.object(panel.tmuxctl, "tmux") as fake:
             fake.side_effect = [
                 mock.Mock(returncode=0, stdout="s\n"),
                 mock.Mock(returncode=0, stdout="client\n"),
@@ -1299,8 +1308,8 @@ class BackgroundLifecycleTests(unittest.TestCase):
             ([ok("s\n"), ok("")], ""),
         ]
         for effects, want in cases:
-            with mock.patch.object(panel, "panel_pane_id", return_value="%0"), \
-                    mock.patch.object(panel, "tmux", side_effect=effects):
+            with mock.patch.object(panel.tmuxctl, "panel_pane_id", return_value="%0"), \
+                    mock.patch.object(panel.tmuxctl, "tmux", side_effect=effects):
                 self.assertEqual(panel.detach_panel(), want, effects)
 
 

@@ -2,9 +2,12 @@
 """Goal store, command line, row model, filter and --list tests."""
 from __future__ import annotations
 
+import curses
 import errno
 import json
+import os
 import re
+import shutil
 import time
 import unittest
 from pathlib import Path
@@ -14,7 +17,7 @@ from tests.goal_case import GoalStoreCase, panel, session
 
 class StoreTests(GoalStoreCase):
     def test_missing_file_means_no_goals(self):
-        self.assertEqual(panel.load_goals(), ({}, False))
+        self.assertEqual(panel.goals.load_goals(), ({}, False))
 
     def test_create_round_trip(self):
         before = time.time()
@@ -34,12 +37,12 @@ class StoreTests(GoalStoreCase):
         self.assertEqual(goals["/p"][0].name, "Auth rework")
 
     def test_write_is_atomic_and_leaves_no_temp_files(self):
-        with mock.patch.object(panel.os, "replace", side_effect=OSError("x")):
+        with mock.patch.object(os, "replace", side_effect=OSError("x")):
             with self.assertRaises(OSError):
                 panel.create_goal("/p", "a")
         self.assertFalse(self.file.exists())
-        self.assertEqual(list(Path(panel.STATE_DIR).iterdir()), [])
-        with mock.patch.object(panel.os, "replace", wraps=panel.os.replace) as r:
+        self.assertEqual(list(Path(panel.state.STATE_DIR).iterdir()), [])
+        with mock.patch.object(os, "replace", wraps=os.replace) as r:
             panel.create_goal("/p", "a")
         self.assertEqual(Path(r.call_args[0][1]), self.file)
 
@@ -134,7 +137,7 @@ class CommandTests(GoalStoreCase):
         text, node = panel.run_command("slice:create Phase two", "/p", goal)
         self.assertIn("created slice", text)
         self.assertEqual(node.parent, goal.id)
-        panel._goals_cache = None
+        panel.state._goals_cache = None
         self.assertEqual(len(panel.load_goals()[0]["/p"]), 2)
         # On a slice, the new slice is a sibling under the same parent.
         text, sibling = panel.run_command(
@@ -230,12 +233,11 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(panel.tail_by_width("ab", 10), "ab")
 
     def test_prompt_survives_resize_and_draw_errors(self):
-        import curses
         scr = mock.Mock()
         scr.getmaxyx.return_value = (5, 20)
         scr.addnstr.side_effect = curses.error
         scr.get_wch.side_effect = [curses.KEY_RESIZE, "x", "\n"]
-        with mock.patch.object(panel.curses, "curs_set"):
+        with mock.patch.object(curses, "curs_set"):
             self.assertEqual(panel.prompt_line(scr, "f: "), "x")
         self.assertGreaterEqual(scr.getmaxyx.call_count, 3)
 
@@ -319,7 +321,7 @@ class RowTests(unittest.TestCase):
         lines, _, _ = panel.build_lines(list(panel.rows_for([g], "")), 40, set(), "")
         loose = next(t for t, k, _ in lines if k == "session" and not t.startswith("  "))
         goal_line = next(t for t, k, _ in lines if k == "goal")
-        glyph_col = loose.index(panel.HARNESS["pi"]["glyph"])
+        glyph_col = loose.index(panel.core.HARNESS["pi"]["glyph"])
         self.assertEqual(goal_line.index("▾"), glyph_col)
         # name starts where a loose session's title starts
         self.assertEqual(goal_line.index("Empty"), glyph_col + 2)
@@ -373,9 +375,9 @@ class RowTests(unittest.TestCase):
         self.assertGreater(panel.display_width(longest), w)
         expected = {}
         for depth in (0, 1, 2):
-            budget = max(4, w - panel.NAME_COL[depth] - 3)
+            budget = max(4, w - panel.core.NAME_COL[depth] - 3)
             expected[depth] = (
-                " " * panel.NAME_COL[depth]
+                " " * panel.core.NAME_COL[depth]
                 + panel.truncate_cols(longest, budget)
             )
             self.assertLessEqual(panel.display_width(expected[depth]), w - 1)
@@ -455,7 +457,7 @@ class RowTests(unittest.TestCase):
     def test_list_lines_nest_goals(self):
         g = self.group()
         g.goals[0].done = True
-        out = panel.list_lines([g])
+        out = panel.main.list_lines([g])
         joined = "\n".join(out)
         self.assertRegex(joined, r"(?m)^  ▾ Empty one  \(0\)$")
         self.assertRegex(joined, r"(?m)^  ✓ Auth rework  \(2\)$")
@@ -472,7 +474,7 @@ class NewInGoalTests(GoalStoreCase):
         self.loose = session("l1", "/p", 200.0)
         self.group = panel.Group("/p", [self.cl, self.loose, self.pi])
         self.goal = panel.create_goal("/p", "g")
-        panel.mutate_goals(
+        panel.goals.mutate_goals(
             lambda d: d["projects"]["/p"][0]["sessions"].extend(["p1"])
         )
         panel.attach_goals([self.group])
@@ -507,12 +509,12 @@ class NewInGoalTests(GoalStoreCase):
             return "%9"
 
         with mock.patch.object(
-            panel, "visible_layout", return_value=("%1", [object()], "%2")
+            panel.panes, "visible_layout", return_value=("%1", [object()], "%2")
         ), mock.patch.object(
-            panel, "spawn_new_session_pane", side_effect=spawn
+            panel.panes, "spawn_new_session_pane", side_effect=spawn
         ), mock.patch.object(
-            panel, "_present_pane", return_value=None
-        ), mock.patch.object(panel, "_write_state"):
+            panel.actions, "_present_pane", return_value=None
+        ), mock.patch.object(panel.state, "_write_state"):
             return panel.new_session(
                 "%1", "/p", [self.group], {}, harness, goal_id
             )
@@ -540,16 +542,16 @@ class NewInGoalTests(GoalStoreCase):
 
     def test_unreadable_store_still_spawns_with_warning(self):
         self.file.write_text("{ nope")
-        panel._goals_cache = None
+        panel.state._goals_cache = None
         spawned = []
         with mock.patch.object(
-            panel, "visible_layout", return_value=("%1", [object()], "%2")
+            panel.panes, "visible_layout", return_value=("%1", [object()], "%2")
         ), mock.patch.object(
-            panel, "spawn_new_session_pane",
+            panel.panes, "spawn_new_session_pane",
             side_effect=lambda *a: spawned.append(a) or "%9",
         ), mock.patch.object(
-            panel, "_present_pane", return_value=None
-        ), mock.patch.object(panel, "_write_state"):
+            panel.actions, "_present_pane", return_value=None
+        ), mock.patch.object(panel.state, "_write_state"):
             warning = panel.new_session(
                 "%1", "/p", [self.group], {}, "pi", self.goal.id
             )
@@ -570,7 +572,7 @@ class NewInGoalTests(GoalStoreCase):
     def test_unwritable_store_spawns_loose_with_warning(self):
         order = []
         with mock.patch.object(
-            panel, "file_session_in_goal",
+            panel.goals, "file_session_in_goal",
             side_effect=OSError(errno.ENOSPC, "No space left on device"),
         ):
             warning = self.run_new("pi", self.goal.id, order)
@@ -630,22 +632,22 @@ class NestingTests(unittest.TestCase):
         self.assertNotIn("⏎ present", goal_items)
         self.assertEqual(
             panel.footer_items(("session", g, g.sessions[0])),
-            panel.SESSION_FOOTER_ITEMS,
+            panel.view.SESSION_FOOTER_ITEMS,
         )
-        self.assertIn("x done", panel.SESSION_FOOTER_ITEMS)
-        self.assertEqual(panel.footer_items(None), panel.FOOTER_ITEMS)
+        self.assertIn("x done", panel.view.SESSION_FOOTER_ITEMS)
+        self.assertEqual(panel.footer_items(None), panel.view.FOOTER_ITEMS)
         self.assertEqual(
             goal_items,
             ("⏎ toggle", "n new", "R rename", "x done", "D delete"),
         )
         self.assertEqual(
             panel.footer_items(("goal_more", g, g.goals[0])),
-            panel.FOOTER_ITEMS,
+            panel.view.FOOTER_ITEMS,
         )
         group_items = panel.footer_items(("group", g, None))
         self.assertEqual(
             group_items,
-            tuple("⏎ toggle" if i == "⏎ present" else i for i in panel.FOOTER_ITEMS),
+            tuple("⏎ toggle" if i == "⏎ present" else i for i in panel.view.FOOTER_ITEMS),
         )
         self.assertEqual(group_items[0], "↑/↓ move")
         self.assertIn("⏎ toggle", group_items)
@@ -666,10 +668,10 @@ class InheritanceTests(GoalStoreCase):
             ("PI_SESSIONS_DIR", str(self.pi)),
             ("CLAUDE_SESSIONS_DIR", str(self.root / "no-claude")),
         ):
-            patcher = mock.patch.object(panel, name, value)
+            patcher = mock.patch.object(panel.core, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        patcher = mock.patch.object(panel, "process_table", return_value=[])
+        patcher = mock.patch.object(panel.procs, "process_table", return_value=[])
         patcher.start()
         self.addCleanup(patcher.stop)
         self.cwd = "/work/proj"
@@ -836,7 +838,7 @@ class InheritanceTests(GoalStoreCase):
         self.assertEqual(kinds[0], ("goal", goal.id))
         self.assertEqual({i for k, i in kinds if k == "session"},
                          {"root", "child"})
-        joined = "\n".join(panel.list_lines([g]))
+        joined = "\n".join(panel.main.list_lines([g]))
         self.assertRegex(joined, r"(?m)^  ▾ Auth  \(2\)$")
         self.assertRegex(joined, r"(?m)^    .*  child$")
         self.assertEqual(len(list(panel.rows_for([g], "Auth"))), len(rows))
@@ -1155,7 +1157,7 @@ class SliceStoreTests(GoalStoreCase):
         rec = self.records()[1]
         self.assertEqual(rec["parent"], goal.id)
         self.assertEqual(rec["name"], "Phase two")
-        panel._goals_cache = None
+        panel.state._goals_cache = None
         loaded = panel.load_goals()[0]["/p"][1]
         self.assertEqual((loaded.id, loaded.parent), (sl.id, goal.id))
 
@@ -1165,7 +1167,7 @@ class SliceStoreTests(GoalStoreCase):
             {"id": "old", "name": "Old", "created": 1, "done": False,
              "collapsed": False, "sessions": []},
         ]}}))
-        panel._goals_cache = None
+        panel.state._goals_cache = None
         goals, bad = panel.load_goals()
         self.assertFalse(bad)
         g = panel.Group("/p", [], goals["/p"])
@@ -1182,7 +1184,7 @@ class SliceStoreTests(GoalStoreCase):
             {"id": "b", "name": "B", "created": 3, "parent": "a",
              "sessions": []},
         ]}}))
-        panel._goals_cache = None
+        panel.state._goals_cache = None
         goals, bad = panel.load_goals()
         self.assertFalse(bad)
         g = panel.Group("/p", [], goals["/p"])
@@ -1440,13 +1442,13 @@ class SliceRowTests(unittest.TestCase):
         self.assertEqual(goal_line.index("▾"), loose.index("π"))
         direct = next(t for t in by_kind["session"] if "d1" in t)
         nested = next(t for t in by_kind["session"] if "a1" in t)
-        self.assertEqual(direct.index(panel.STATUS["idle"][0]), 5)
-        self.assertEqual(nested.index(panel.STATUS["idle"][0]), 8)
-        self.assertEqual(loose.index(panel.STATUS["idle"][0]), 1)
+        self.assertEqual(direct.index(panel.core.STATUS["idle"][0]), 5)
+        self.assertEqual(nested.index(panel.core.STATUS["idle"][0]), 8)
+        self.assertEqual(loose.index(panel.core.STATUS["idle"][0]), 1)
 
     def test_list_nests_slices_and_counts_the_subtree(self):
         g = self.group()
-        out = panel.list_lines([g])
+        out = panel.main.list_lines([g])
         joined = "\n".join(out)
         self.assertRegex(joined, r"(?m)^  ▾ GoalName  \(4\)$")
         self.assertRegex(joined, r"(?m)^    ▾ SliceName  \(2\)$")
@@ -1541,20 +1543,19 @@ class NewBoxTests(GoalStoreCase):
     def test_preselection_matches_inference(self):
         self.assertEqual(panel.picker_start("claude", self.BOTH), 1)
         self.assertEqual(panel.picker_start("pi", self.BOTH), 0)
-        with mock.patch.object(panel, "default_harness", return_value="claude"):
+        with mock.patch.object(panel.panes, "default_harness", return_value="claude"):
             self.assertEqual(panel.picker_start(None, self.BOTH), 1)
         self.assertEqual(panel.picker_start("claude", ["pi"]), 0)
 
     def test_installed_harnesses_follow_harness_order(self):
         with mock.patch.object(
-            panel.shutil, "which", side_effect=lambda k: k == "claude"
+            shutil, "which", side_effect=lambda k: k == "claude"
         ):
             self.assertEqual(panel.installed_harnesses(), ["claude"])
-        with mock.patch.object(panel.shutil, "which", return_value="/x"):
-            self.assertEqual(panel.installed_harnesses(), list(panel.HARNESS))
+        with mock.patch.object(shutil, "which", return_value="/x"):
+            self.assertEqual(panel.installed_harnesses(), list(panel.core.HARNESS))
 
     def test_key_handling_both_sections(self):
-        import curses
         state = panel.new_box_start(self.row("group"), self.BOTH)
         # Focus starts on Harnesses so Enter keeps starting the session.
         self.assertEqual(
@@ -1588,7 +1589,6 @@ class NewBoxTests(GoalStoreCase):
             )
 
     def test_vertical_navigation_crosses_sections(self):
-        import curses
         for up in (curses.KEY_UP, ord("k")):
             state = panel.new_box_start(self.row("group"), self.BOTH)
             state, action = panel.new_box_key(state, self.BOTH, up)
@@ -1623,7 +1623,6 @@ class NewBoxTests(GoalStoreCase):
         )
 
     def test_left_and_right_do_nothing_in_the_box(self):
-        import curses
         for key in (curses.KEY_LEFT, curses.KEY_RIGHT):
             state = panel.new_box_start(self.row("group"), self.BOTH)
             state, action = panel.new_box_key(state, self.BOTH, key)
@@ -1639,7 +1638,6 @@ class NewBoxTests(GoalStoreCase):
             )
 
     def test_goal_section_picks_with_enter_or_one(self):
-        import curses
         state = panel.new_box_start(self.row("group"), self.BOTH)
         state, _ = panel.new_box_key(state, self.BOTH, 9)  # Tab to Goal
         self.assertEqual(
@@ -1743,7 +1741,7 @@ class NewBoxTests(GoalStoreCase):
         scr.getmaxyx.return_value = size
         win = mock.Mock()
         win.getch.side_effect = keys
-        with mock.patch.object(panel.curses, "newwin", return_value=win) as nw:
+        with mock.patch.object(curses, "newwin", return_value=win) as nw:
             result = panel.new_box(
                 scr, row or self.row("group"), installed or self.BOTH,
                 hint, sections,
@@ -1776,7 +1774,6 @@ class NewBoxTests(GoalStoreCase):
             self.assertIsNone(self.run_box(keys)[0])
 
     def test_box_survives_resize_and_ticks(self):
-        import curses
         result, scr, _, _nw = self.run_box(
             [curses.KEY_RESIZE, -1, 10]
         )
@@ -1789,7 +1786,7 @@ class NewBoxTests(GoalStoreCase):
         scr.getmaxyx.return_value = (24, 30)
         win = mock.Mock()
         win.getch.side_effect = KeyboardInterrupt
-        with mock.patch.object(panel.curses, "newwin", return_value=win):
+        with mock.patch.object(curses, "newwin", return_value=win):
             self.assertIsNone(
                 panel.new_box(scr, self.row("group"), self.BOTH)
             )
@@ -1810,9 +1807,9 @@ class NewBoxTests(GoalStoreCase):
             scr.refresh.side_effect = KeyboardInterrupt
             win = mock.Mock()
             win.getch.side_effect = keys
-            with mock.patch.object(panel.curses, "newwin", return_value=win), \
-                    mock.patch.object(panel, "detach_panel") as detach, \
-                    mock.patch.object(panel, "new_session") as spawn:
+            with mock.patch.object(curses, "newwin", return_value=win), \
+                    mock.patch.object(panel.actions, "detach_panel") as detach, \
+                    mock.patch.object(panel.actions, "new_session") as spawn:
                 self.assertEqual(
                     panel.new_box(scr, self.row("group"), self.BOTH),
                     expected,
@@ -1823,17 +1820,16 @@ class NewBoxTests(GoalStoreCase):
             scr.refresh.assert_called()  # one interrupt does not skip it
 
     def test_box_cancels_when_it_cannot_draw(self):
-        import curses
         scr = mock.Mock()
         scr.getmaxyx.return_value = (24, 30)
-        with mock.patch.object(panel.curses, "newwin", side_effect=curses.error):
+        with mock.patch.object(curses, "newwin", side_effect=curses.error):
             result = panel.new_box(
                 scr, self.row("group"), self.BOTH, "claude"
             )
         self.assertIsNone(result)
         scr.getch.assert_not_called()
         scr.getmaxyx.return_value = (2, 4)  # too small for any box
-        with mock.patch.object(panel.curses, "newwin") as nw:
+        with mock.patch.object(curses, "newwin") as nw:
             result = panel.new_box(scr, self.row("group"), self.BOTH)
         self.assertIsNone(result)
         nw.assert_not_called()
@@ -1844,9 +1840,9 @@ class NewBoxTests(GoalStoreCase):
         scr.getmaxyx.return_value = (24, 30)
         win = mock.Mock()
         win.getch.side_effect = keys
-        with mock.patch.object(panel.curses, "newwin", return_value=win), \
+        with mock.patch.object(curses, "newwin", return_value=win), \
                 mock.patch.object(
-                    panel, "prompt_line", return_value=prompt
+                    panel.actions, "prompt_line", return_value=prompt
                 ) as prompt_line:
             result = panel.new_box_flow(
                 scr, row or self.row("group"), self.BOTH, container=container
@@ -1919,7 +1915,7 @@ class NewBoxTests(GoalStoreCase):
     def test_corrupt_store_starts_loose_with_a_warning(self):
         self.file.parent.mkdir(parents=True, exist_ok=True)
         self.file.write_text("{ nope")
-        panel._goals_cache = None
+        panel.state._goals_cache = None
         result, _ = self.run_flow([9, 10, 10])
         harness, container, notices, created = result
         self.assertEqual(harness, "pi")
@@ -1932,7 +1928,7 @@ class NewBoxTests(GoalStoreCase):
     def test_unwritable_store_starts_loose_with_a_warning(self):
         before = self.file.read_text() if self.file.exists() else None
         with mock.patch.object(
-            panel.os, "replace",
+            os, "replace",
             side_effect=OSError(errno.ENOSPC, "No space left on device"),
         ):
             result, _ = self.run_flow([9, 10, 10])

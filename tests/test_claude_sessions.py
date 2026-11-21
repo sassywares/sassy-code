@@ -2,18 +2,14 @@
 """Claude Code transcript tests: titles, launch cwd, background tasks, widths."""
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("sassy_code_panel", ROOT / "panel.py")
-panel = importlib.util.module_from_spec(SPEC)
-sys.modules["sassy_code_panel"] = panel
-SPEC.loader.exec_module(panel)
+from tests.panel_loader import load_panel
+
+panel = load_panel()
 
 SID = "11111111-2222-3333-4444-555555555555"
 NOTE = (

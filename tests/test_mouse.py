@@ -2,13 +2,16 @@
 """P6 mouse tests: the drawn hit map, click dispatch, drag-to-move and pickers."""
 from __future__ import annotations
 
+import curses
 import json
 import os
 import tempfile
+import time
 import unittest
 from unittest import mock
 
 from tests.goal_case import GoalStoreCase, panel, session
+from tests.panel_loader import ROOT
 
 
 class FakeScreen:
@@ -71,7 +74,7 @@ class FakeWindow:
     def getch(self):
         event = self.queue.pop(0)
         bstate = (
-            event[2] if len(event) > 2 else panel.curses.BUTTON1_CLICKED
+            event[2] if len(event) > 2 else curses.BUTTON1_CLICKED
         )
         if event[0] == "mouse_line":
             return self._mouse(self.x + 1, self.y + 1 + event[1], bstate)
@@ -89,7 +92,7 @@ class MouseCase(unittest.TestCase):
 
     def setUp(self):
         patcher = mock.patch.object(
-            panel.curses, "color_pair", return_value=0
+            curses, "color_pair", return_value=0
         )
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -123,30 +126,30 @@ class MouseMaskTests(unittest.TestCase):
 
         def mousemask(mask):
             calls.append(mask)
-            return panel.curses.ALL_MOUSE_EVENTS, old_mask
+            return curses.ALL_MOUSE_EVENTS, old_mask
 
         run = mock.Mock(side_effect=failure)
         with mock.patch.object(
-            panel.curses, "mousemask", side_effect=mousemask
-        ), mock.patch.object(panel, "_main_curses", run):
+            curses, "mousemask", side_effect=mousemask
+        ), mock.patch.object(panel.main, "_main_curses", run):
             if failure is not None:
                 with self.assertRaises(type(failure)):
-                    panel.main_curses(object(), "/p")
+                    panel.main.main_curses(object(), "/p")
             else:
-                panel.main_curses(object(), "/p")
+                panel.main.main_curses(object(), "/p")
         run.assert_called_once()
         return calls
 
     def test_enable_and_restore_pair(self):
         calls = self.run_main(0x2A)
         self.assertEqual(
-            calls, [panel.curses.ALL_MOUSE_EVENTS, 0x2A]
+            calls, [curses.ALL_MOUSE_EVENTS, 0x2A]
         )
 
     def test_previous_mask_is_restored_after_an_exception(self):
         calls = self.run_main(0x2A, RuntimeError("boom"))
         self.assertEqual(
-            calls, [panel.curses.ALL_MOUSE_EVENTS, 0x2A]
+            calls, [curses.ALL_MOUSE_EVENTS, 0x2A]
         )
 
 
@@ -294,7 +297,7 @@ class ClickDispatchTests(MouseCase):
     def test_second_click_within_the_window_presents(self):
         key = panel.row_key(self.session_row)
         first = 0.0
-        window = panel.DOUBLE_CLICK_SECONDS
+        window = panel.core.DOUBLE_CLICK_SECONDS
         self.assertEqual(
             panel.click_kind(
                 self.session_row, first + window / 2, key, first
@@ -349,27 +352,29 @@ class ClickDispatchTests(MouseCase):
 class WheelTests(MouseCase):
     def test_wheel_masks_classify_both_directions(self):
         for name in ("BUTTON4_PRESSED", "BUTTON4_CLICKED"):
-            if hasattr(panel.curses, name):
-                self.assertTrue(panel.MOUSE_WHEEL_UP & getattr(
-                    panel.curses, name
+            if hasattr(curses, name):
+                self.assertTrue(panel.core.MOUSE_WHEEL_UP & getattr(
+                    curses, name
                 ))
-        self.assertEqual(panel.mouse_kind(panel.MOUSE_WHEEL_UP), "wheel_up")
-        if panel.MOUSE_WHEEL_DOWN:
+        self.assertEqual(
+            panel.mouse_kind(panel.core.MOUSE_WHEEL_UP), "wheel_up"
+        )
+        if panel.core.MOUSE_WHEEL_DOWN:
             self.assertEqual(
-                panel.mouse_kind(panel.MOUSE_WHEEL_DOWN), "wheel_down"
+                panel.mouse_kind(panel.core.MOUSE_WHEEL_DOWN), "wheel_down"
             )
 
     def test_shift_and_alt_clicks_are_not_wheel_notches(self):
         modifiers = (
-            panel.curses.BUTTON_SHIFT,
-            panel.curses.BUTTON_ALT,
-            panel.curses.BUTTON_SHIFT | panel.curses.BUTTON_ALT,
+            curses.BUTTON_SHIFT,
+            curses.BUTTON_ALT,
+            curses.BUTTON_SHIFT | curses.BUTTON_ALT,
         )
         buttons = (
-            panel.curses.BUTTON1_PRESSED,
-            panel.curses.BUTTON1_RELEASED,
-            panel.curses.BUTTON1_CLICKED,
-            panel.curses.BUTTON1_DOUBLE_CLICKED,
+            curses.BUTTON1_PRESSED,
+            curses.BUTTON1_RELEASED,
+            curses.BUTTON1_CLICKED,
+            curses.BUTTON1_DOUBLE_CLICKED,
         )
         for modifier in modifiers:
             for button in buttons:
@@ -380,21 +385,21 @@ class WheelTests(MouseCase):
 
     def test_button_two_release_is_not_a_wheel_notch(self):
         self.assertNotIn(
-            panel.mouse_kind(panel.curses.BUTTON2_RELEASED),
+            panel.mouse_kind(curses.BUTTON2_RELEASED),
             ("wheel_up", "wheel_down"),
         )
         self.assertNotIn(
-            panel.mouse_kind(panel.curses.BUTTON2_RELEASED
-                             | panel.curses.BUTTON1_RELEASED),
+            panel.mouse_kind(curses.BUTTON2_RELEASED
+                             | curses.BUTTON1_RELEASED),
             ("wheel_up", "wheel_down"),
         )
 
     def test_bare_modifier_bits_are_not_wheel_notches(self):
         for bstate in (
-            panel.curses.BUTTON_SHIFT,
-            panel.curses.BUTTON_ALT,
-            panel.curses.BUTTON_CTRL,
-            panel.curses.BUTTON_SHIFT | panel.curses.BUTTON_ALT,
+            curses.BUTTON_SHIFT,
+            curses.BUTTON_ALT,
+            curses.BUTTON_CTRL,
+            curses.BUTTON_SHIFT | curses.BUTTON_ALT,
         ):
             self.assertNotIn(
                 panel.mouse_kind(bstate), ("wheel_up", "wheel_down")
@@ -404,34 +409,34 @@ class WheelTests(MouseCase):
         # A stand-in for a BUTTON5_PRESSED|CLICKED mask, whatever bits the
         # build actually uses.
         real = 1 << 30
-        with mock.patch.multiple(panel, MOUSE_WHEEL_DOWN=real):
+        with mock.patch.multiple(panel.core, MOUSE_WHEEL_DOWN=real):
             self.assertEqual(panel.mouse_kind(real), "wheel_down")
             self.assertEqual(
-                panel.mouse_kind(real | panel.curses.BUTTON1_PRESSED),
+                panel.mouse_kind(real | curses.BUTTON1_PRESSED),
                 "wheel_down",
             )
-        with mock.patch.multiple(panel, MOUSE_WHEEL_DOWN=0):
+        with mock.patch.multiple(panel.core, MOUSE_WHEEL_DOWN=0):
             self.assertEqual(panel.mouse_kind(real), "")
 
     def test_motion_and_middle_or_right_presses_are_unclassified(self):
         self.assertEqual(panel.mouse_kind(0), "")
         for bstate in (
-            panel.curses.BUTTON2_PRESSED,
-            panel.curses.BUTTON3_PRESSED,
-            panel.curses.BUTTON2_RELEASED,
-            panel.curses.BUTTON3_CLICKED,
+            curses.BUTTON2_PRESSED,
+            curses.BUTTON3_PRESSED,
+            curses.BUTTON2_RELEASED,
+            curses.BUTTON3_CLICKED,
         ):
             self.assertEqual(panel.mouse_kind(bstate), "")
 
     def test_button_press_release_click_classification(self):
         self.assertEqual(
-            panel.mouse_kind(panel.curses.BUTTON1_PRESSED), "press"
+            panel.mouse_kind(curses.BUTTON1_PRESSED), "press"
         )
         self.assertEqual(
-            panel.mouse_kind(panel.curses.BUTTON1_RELEASED), "release"
+            panel.mouse_kind(curses.BUTTON1_RELEASED), "release"
         )
         self.assertEqual(
-            panel.mouse_kind(panel.curses.BUTTON1_CLICKED), "click"
+            panel.mouse_kind(curses.BUTTON1_CLICKED), "click"
         )
         self.assertEqual(panel.mouse_kind(0), "")
 
@@ -464,7 +469,7 @@ class WheelTests(MouseCase):
 
     def test_press_and_click_bits_in_one_bstate_are_one_notch(self):
         both = (
-            panel.curses.BUTTON4_PRESSED | panel.curses.BUTTON4_CLICKED
+            curses.BUTTON4_PRESSED | curses.BUTTON4_CLICKED
         )
         self.assertEqual(panel.mouse_kind(both), "wheel_up")
         self.assertEqual(panel.wheel_cursor(5, 2, panel.mouse_kind(both)), 1)
@@ -475,7 +480,7 @@ class MouseDebugTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "mouse.log")
             with mock.patch.dict(
-                panel.os.environ, {"SASSY_CODE_MOUSE_DEBUG": path}
+                os.environ, {"SASSY_CODE_MOUSE_DEBUG": path}
             ):
                 panel.mouse_debug(0x2000000, 3, 4, "wheel_down")
                 panel.mouse_debug(5, 6, 7, "")
@@ -489,21 +494,22 @@ class MouseDebugTests(unittest.TestCase):
     def test_debug_is_inert_when_unset_and_never_raises(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "mouse.log")
-            with mock.patch.dict(panel.os.environ, {}, clear=False):
-                panel.os.environ.pop("SASSY_CODE_MOUSE_DEBUG", None)
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("SASSY_CODE_MOUSE_DEBUG", None)
                 panel.mouse_debug(1, 2, 3, "wheel_down")
             self.assertFalse(os.path.exists(path))
             with mock.patch.dict(
-                panel.os.environ,
+                os.environ,
                 {"SASSY_CODE_MOUSE_DEBUG": os.path.join(d, "missing", "x.log")},
             ):
                 panel.mouse_debug(1, 2, 3, "wheel_down")  # no directory, no raise
+            # The guard's "repo" is the repo root, i.e. the package's parent,
+            # not the package directory itself.
             inside = os.path.join(
-                os.path.dirname(os.path.realpath(panel.__file__)),
-                "mouse-debug-should-not-exist.log",
+                str(ROOT), "mouse-debug-should-not-exist.log"
             )
             with mock.patch.dict(
-                panel.os.environ, {"SASSY_CODE_MOUSE_DEBUG": inside}
+                os.environ, {"SASSY_CODE_MOUSE_DEBUG": inside}
             ):
                 panel.mouse_debug(1, 2, 3, "wheel_down")
             self.assertFalse(os.path.exists(inside))
@@ -562,7 +568,7 @@ class DragMoveTests(StoreMouseCase):
         )
 
     def test_a_held_drag_expires_only_after_the_stated_age(self):
-        limit = panel.DRAG_EXPIRE_SECONDS
+        limit = panel.core.DRAG_EXPIRE_SECONDS
         self.assertFalse(panel.drag_expired(100.0, 100.0))
         self.assertFalse(panel.drag_expired(100.0, 100.0 + limit))
         self.assertTrue(panel.drag_expired(100.0, 100.0 + limit + 0.001))
@@ -571,9 +577,9 @@ class DragMoveTests(StoreMouseCase):
     def test_mouse_traffic_enforces_drag_expiry_without_an_idle_tick(self):
         events = [panel.MOUSE_KEY] * 3 + [ord("q")]
         mouse = [
-            (0, 1, panel.curses.BUTTON1_PRESSED),
+            (0, 1, curses.BUTTON1_PRESSED),
             (0, 1, 0),  # ignored pointer motion, not an idle -1 tick
-            (0, 2, panel.curses.BUTTON1_RELEASED),  # the stale release
+            (0, 2, curses.BUTTON1_RELEASED),  # the stale release
         ]
         hits = {
             1: ("session", self.g, self.a),
@@ -597,17 +603,25 @@ class DragMoveTests(StoreMouseCase):
             return 0, _mx, my, 0, bstate
 
         with mock.patch.multiple(
-            panel,
+            panel.status,
             load_groups=lambda: [self.g],
-            attach_goals=lambda groups: False,
+        ), mock.patch.multiple(
+            panel.view,
             draw=lambda *args, **kwargs: (0, 0, hits),
+        ), mock.patch.multiple(
+            panel.tmuxctl,
             panel_pane_id=lambda: "",
             set_panel_tag=lambda pane: None,
-            migrate_state=lambda: None,
-            _read_state=lambda: "a",
-            DRAG_EXPIRE_SECONDS=0.5,
+        ), mock.patch.object(
+            panel.core, "DRAG_EXPIRE_SECONDS", 0.5
+        ), mock.patch.object(
+            panel.goals, "attach_goals", lambda groups: False
+        ), mock.patch.object(
+            panel.state, "migrate_state", lambda: None
+        ), mock.patch.object(
+            panel.state, "_read_state", lambda: "a"
         ), mock.patch.multiple(
-            panel.curses,
+            curses,
             curs_set=lambda *args: None,
             start_color=lambda: None,
             use_default_colors=lambda: None,
@@ -615,13 +629,13 @@ class DragMoveTests(StoreMouseCase):
             set_escdelay=lambda *args: None,
             getmouse=getmouse,
         ), mock.patch.object(
-            panel.time, "time", side_effect=advancing_time
+            time, "time", side_effect=advancing_time
         ), mock.patch.dict(
             "os.environ", {"TMUX": ""}
         ), mock.patch.object(
-            panel, "move_session_row", return_value=(None, None)
+            panel.actions, "move_session_row", return_value=(None, None)
         ) as move:
-            panel._main_curses(LoopScreen(20, 80), "/p")
+            panel.main._main_curses(LoopScreen(20, 80), "/p")
 
         move.assert_not_called()
 
@@ -712,7 +726,7 @@ class TierClickLoopTests(StoreMouseCase):
         sessions = [session(f"s{i}", "/p", 100.0 - i) for i in range(10)]
         g = panel.Group("/p", sessions)
         events = [ord("]"), panel.MOUSE_KEY, SystemExit]
-        mouse = [(10, 12, panel.curses.BUTTON1_CLICKED)]
+        mouse = [(10, 12, curses.BUTTON1_CLICKED)]
         snaps = []
 
         class LoopScreen(FakeScreen):
@@ -725,7 +739,7 @@ class TierClickLoopTests(StoreMouseCase):
                     raise event
                 return event
 
-        real_draw = panel.draw
+        real_draw = panel.view.draw
 
         def draw(stdscr, groups, flt, cursor, offset, collapsed, message,
                  expanded, notice):
@@ -741,16 +755,23 @@ class TierClickLoopTests(StoreMouseCase):
             return 0, mx, my, 0, bstate
 
         with mock.patch.multiple(
-            panel,
+            panel.status,
             load_groups=lambda: [g],
-            attach_goals=lambda groups: False,
+        ), mock.patch.multiple(
+            panel.view,
             draw=draw,
+        ), mock.patch.multiple(
+            panel.tmuxctl,
             panel_pane_id=lambda: "",
             set_panel_tag=lambda pane: None,
-            migrate_state=lambda: None,
-            _read_state=lambda: "s0",
+        ), mock.patch.object(
+            panel.goals, "attach_goals", lambda groups: False
+        ), mock.patch.object(
+            panel.state, "migrate_state", lambda: None
+        ), mock.patch.object(
+            panel.state, "_read_state", lambda: "s0"
         ), mock.patch.multiple(
-            panel.curses,
+            curses,
             curs_set=lambda *args: None,
             start_color=lambda: None,
             use_default_colors=lambda: None,
@@ -759,7 +780,7 @@ class TierClickLoopTests(StoreMouseCase):
             getmouse=getmouse,
         ), mock.patch.dict("os.environ", {"TMUX": ""}):
             with self.assertRaises(SystemExit):
-                panel._main_curses(LoopScreen(20, 80), "/p")
+                panel.main._main_curses(LoopScreen(20, 80), "/p")
 
         self.assertEqual(snaps[1][1], {"/p": 1})  # `]` revealed
         self.assertEqual(snaps[-1][1], {})  # the click hid one tier
@@ -786,9 +807,9 @@ class PickerClickTests(StoreMouseCase):
             return 0, mx, my, 0, bstate
 
         with mock.patch.object(
-            panel.curses, "newwin", side_effect=newwin
+            curses, "newwin", side_effect=newwin
         ), mock.patch.object(
-            panel.curses, "getmouse", side_effect=getmouse
+            curses, "getmouse", side_effect=getmouse
         ):
             return call(screen)
 
@@ -839,8 +860,8 @@ class PickerClickTests(StoreMouseCase):
 
     def test_press_then_release_on_an_item_picks_it(self):
         # Line 3 is the second harness, below the divider.
-        pressed = [("mouse_line", 3, panel.curses.BUTTON1_PRESSED)]
-        released = [("mouse_line", 3, panel.curses.BUTTON1_RELEASED)]
+        pressed = [("mouse_line", 3, curses.BUTTON1_PRESSED)]
+        released = [("mouse_line", 3, curses.BUTTON1_RELEASED)]
         self.assertEqual(
             self.new_box(pressed + released),
             {"action": "harness", "harness": "claude"},
@@ -852,8 +873,8 @@ class PickerClickTests(StoreMouseCase):
 
     def test_outside_press_then_outside_release_cancels_either_box(self):
         events = [
-            ("mouse_outside", 0, panel.curses.BUTTON1_PRESSED),
-            ("mouse_outside", 0, panel.curses.BUTTON1_RELEASED),
+            ("mouse_outside", 0, curses.BUTTON1_PRESSED),
+            ("mouse_outside", 0, curses.BUTTON1_RELEASED),
         ]
         self.assertIsNone(self.new_box(events))
         self.assertIsNone(self.move_box(events))
@@ -870,9 +891,9 @@ class PickerClickTests(StoreMouseCase):
 
     def test_wheel_and_other_buttons_do_not_pick_in_either_box(self):
         ignored = (
-            panel.curses.BUTTON4_CLICKED,  # a wheel notch
-            panel.curses.BUTTON3_CLICKED,  # right button
-            panel.curses.BUTTON2_CLICKED,  # middle button
+            curses.BUTTON4_CLICKED,  # a wheel notch
+            curses.BUTTON3_CLICKED,  # right button
+            curses.BUTTON2_CLICKED,  # middle button
         )
         for bstate in ignored:
             with self.subTest(bstate=bstate, box="new"):
@@ -887,7 +908,7 @@ class PickerClickTests(StoreMouseCase):
     def test_keyboard_digit_still_picks_after_an_ignored_mouse_event(self):
         self.assertEqual(
             self.new_box([
-                ("mouse_line", 2, panel.curses.BUTTON4_CLICKED),
+                ("mouse_line", 2, curses.BUTTON4_CLICKED),
                 ("key", ord("2")),
             ]),
             {"action": "harness", "harness": "claude"},

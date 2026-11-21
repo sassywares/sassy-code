@@ -3,7 +3,11 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PANEL_CMD="$(printf 'python3 %q' "$DIR/panel.py")"
+# `cd` first: `python3 -m panel` puts the *caller's* cwd on sys.path ahead of
+# PYTHONPATH, so any project with its own `panel/` (or a shadowing stdlib name)
+# would be imported instead. The panel never reads its own cwd; every session it
+# spawns gets an explicit `-c`.
+PANEL_CMD="$(printf 'cd %q && env PYTHONPATH=%q python3 -m panel' "$DIR" "$DIR")"
 SESSION="sassy-code"
 WIDTH="${SASSY_CODE_WIDTH:-22%}"
 
@@ -48,10 +52,26 @@ ensure_new_session_key() {
     "$PANEL_CMD --new-session --pane #{pane_id}" 2>/dev/null || true
 }
 
+ensure_status_line() {
+  # tmux's default status-left is "[#{session_name}] " but its
+  # status-left-length default (10) is shorter, so "sassy-code" is clipped and
+  # the window list runs straight into it. Widen only the length, for this
+  # session, to exactly what status-left renders: the two brackets, the name
+  # and the trailing space. Nothing else on the line changes. The `:` keeps the
+  # target exact, so a sibling like `sassy-code-bg` can never receive it.
+  tmux set-option -t "=$SESSION:" status-left-length \
+    "$(( ${#SESSION} + 3 ))" 2>/dev/null || true
+}
+
 ensure_tmux_config() {
   ensure_extended_keys
   ensure_pane_keys
   ensure_new_session_key
+  # No session to style yet on the config-only cold start; it is set on the
+  # next launch, once the layout exists.
+  if tmux has-session -t "=$SESSION" 2>/dev/null; then
+    ensure_status_line
+  fi
 }
 
 if [ "${SASSY_CODE_TMUX_CONFIG_ONLY:-}" = "1" ]; then

@@ -52,8 +52,8 @@ def write_pi(path: Path, sid: str, *, role: str, stop: str | None,
 
 class StatusTests(unittest.TestCase):
     def setUp(self):
-        panel._ATTENTION.clear()
-        self.addCleanup(panel._ATTENTION.clear)
+        panel.core._ATTENTION.clear()
+        self.addCleanup(panel.core._ATTENTION.clear)
 
     def test_terminal_file_without_a_process_is_idle(self):
         s = session()
@@ -97,29 +97,29 @@ class StatusTests(unittest.TestCase):
                 pid=1, tag="s",
             )
             groups = [panel.Group(cwd="/p", sessions=[s])]
-            with mock.patch.object(panel, "visible_layout",
+            with mock.patch.object(panel.panes, "visible_layout",
                                    return_value=("%1", [pane], "%2")), \
-                    mock.patch.object(panel, "process_table",
+                    mock.patch.object(panel.procs, "process_table",
                                       return_value=[]), \
-                    mock.patch.object(panel, "pane_has_agent",
+                    mock.patch.object(panel.panes, "pane_has_agent",
                                       return_value=True), \
-                    mock.patch.object(panel, "set_pane_tag"), \
-                    mock.patch.object(panel, "focus"), \
-                    mock.patch.object(panel, "_write_state"):
+                    mock.patch.object(panel.tmuxctl, "set_pane_tag"), \
+                    mock.patch.object(panel.tmuxctl, "focus"), \
+                    mock.patch.object(panel.state, "_write_state"):
                 self.assertIsNone(panel.present_session(s, groups))
             self.assertFalse(panel.attention_active("s"))
-            with mock.patch.object(panel, "session_files",
+            with mock.patch.object(panel.status, "session_files",
                                    return_value=[(str(path), "pi")]), \
-                    mock.patch.object(panel, "process_table",
+                    mock.patch.object(panel.procs, "process_table",
                                       return_value=[]), \
-                    mock.patch.object(panel, "managed_panes",
+                    mock.patch.object(panel.tmuxctl, "managed_panes",
                                       return_value=[]), \
-                    mock.patch.object(panel, "running_session_processes",
+                    mock.patch.object(panel.procs, "running_session_processes",
                                       return_value={}), \
-                    mock.patch.object(panel, "STATE_DIR",
+                    mock.patch.object(panel.state, "STATE_DIR",
                                       str(Path(tmp) / "state")), \
-                    mock.patch.object(panel, "_sessions_cache", None), \
-                    mock.patch.object(panel, "_goals_cache", None):
+                    mock.patch.object(panel.state, "_sessions_cache", None), \
+                    mock.patch.object(panel.state, "_goals_cache", None):
                 groups = panel.load_groups()
             got = panel.session_index(groups)["s"]
             self.assertFalse(panel.attention_active("s"))
@@ -142,16 +142,16 @@ class StatusTests(unittest.TestCase):
 
             def status_for(procs):
                 with mock.patch.object(
-                        panel, "session_files",
+                        panel.status, "session_files",
                         return_value=[(str(path), "pi")]), \
                         mock.patch.object(
-                            panel, "process_table", return_value=procs), \
+                            panel.procs, "process_table", return_value=procs), \
                         mock.patch.object(
-                            panel, "managed_panes", return_value=[pane]), \
+                            panel.tmuxctl, "managed_panes", return_value=[pane]), \
                         mock.patch.object(
-                            panel, "STATE_DIR", str(Path(tmp) / "state")), \
-                        mock.patch.object(panel, "_sessions_cache", None), \
-                        mock.patch.object(panel, "_goals_cache", None):
+                            panel.state, "STATE_DIR", str(Path(tmp) / "state")), \
+                        mock.patch.object(panel.state, "_sessions_cache", None), \
+                        mock.patch.object(panel.state, "_goals_cache", None):
                     return panel.session_index(panel.load_groups())["s"].status
 
             self.assertEqual(status_for(shell), "idle")
@@ -167,15 +167,15 @@ class StatusTests(unittest.TestCase):
                 id="%2", window_id="@1", session_name="viewer",
                 pid=100, tag="s",
             )
-            with mock.patch.object(panel, "session_files",
+            with mock.patch.object(panel.status, "session_files",
                                    return_value=[(str(path), "pi")]), \
-                    mock.patch.object(panel, "process_table", return_value=[]), \
-                    mock.patch.object(panel, "managed_panes",
+                    mock.patch.object(panel.procs, "process_table", return_value=[]), \
+                    mock.patch.object(panel.tmuxctl, "managed_panes",
                                       return_value=[pane]), \
-                    mock.patch.object(panel, "STATE_DIR",
+                    mock.patch.object(panel.state, "STATE_DIR",
                                       str(Path(tmp) / "state")), \
-                    mock.patch.object(panel, "_sessions_cache", None), \
-                    mock.patch.object(panel, "_goals_cache", None):
+                    mock.patch.object(panel.state, "_sessions_cache", None), \
+                    mock.patch.object(panel.state, "_goals_cache", None):
                 groups = panel.load_groups()
             self.assertEqual(panel.session_index(groups)["s"].status,
                              "in_progress")
@@ -184,7 +184,7 @@ class StatusTests(unittest.TestCase):
                 id="%3", window_id="@1", session_name=panel.BG_SESSION,
                 pid=100, tag="s",
             )
-            with mock.patch.object(panel, "kill_pane") as kill:
+            with mock.patch.object(panel.tmuxctl, "kill_pane") as kill:
                 panel.reap_hidden([hidden], groups, [], {})
             kill.assert_not_called()
 
@@ -231,8 +231,8 @@ class StatusTests(unittest.TestCase):
             id="%1", window_id="@1", session_name=panel.BG_SESSION,
             pid=123, tag=s.id,
         )
-        with mock.patch.object(panel, "pane_has_agent", return_value=True), \
-                mock.patch.object(panel, "kill_pane"):
+        with mock.patch.object(panel.panes, "pane_has_agent", return_value=True), \
+                mock.patch.object(panel.tmuxctl, "kill_pane"):
             panel.reap_hidden([pane], [g], [], {})
         self.assertTrue(panel.attention_active(s.id))
         self.assertEqual(s.status, "needs_input")
@@ -242,16 +242,16 @@ class StatusTests(unittest.TestCase):
             path = Path(tmp) / "s.jsonl"
             write_pi(path, "s", role="user", stop=None)
             panel.mark_attention("s")
-            with mock.patch.object(panel, "session_files",
+            with mock.patch.object(panel.status, "session_files",
                                    return_value=[(str(path), "pi")]), \
-                    mock.patch.object(panel, "process_table", return_value=[]), \
-                    mock.patch.object(panel, "managed_panes", return_value=[]), \
-                    mock.patch.object(panel, "running_session_processes",
+                    mock.patch.object(panel.procs, "process_table", return_value=[]), \
+                    mock.patch.object(panel.tmuxctl, "managed_panes", return_value=[]), \
+                    mock.patch.object(panel.procs, "running_session_processes",
                                       return_value={}), \
-                    mock.patch.object(panel, "STATE_DIR",
+                    mock.patch.object(panel.state, "STATE_DIR",
                                       str(Path(tmp) / "state")), \
-                    mock.patch.object(panel, "_sessions_cache", None), \
-                    mock.patch.object(panel, "_goals_cache", None):
+                    mock.patch.object(panel.state, "_sessions_cache", None), \
+                    mock.patch.object(panel.state, "_goals_cache", None):
                 groups = panel.load_groups()
             s = panel.session_index(groups)["s"]
             self.assertFalse(panel.attention_active("s"))
@@ -323,10 +323,10 @@ class SessionStoreTests(unittest.TestCase):
             ("STATE_DIR", str(self.tmp / "state")),
             ("_sessions_cache", None),
         ):
-            patcher = mock.patch.object(panel, name, value)
+            patcher = mock.patch.object(panel.state, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        self.file = Path(panel.STATE_DIR) / panel.SESSIONS_STATE
+        self.file = Path(panel.state.STATE_DIR) / panel.SESSIONS_STATE
 
     def test_toggle_round_trip_keyed_by_session_id(self):
         a = session("a", 100.0)
@@ -362,7 +362,7 @@ class SessionStoreTests(unittest.TestCase):
         with self.assertRaises(panel.SessionError):
             panel.toggle_session_done(session())
         self.assertEqual(self.file.read_text(), "{")
-        self.assertIn("unreadable", panel.sessions_guard())
+        self.assertIn("unreadable", panel.state.sessions_guard())
 
     def test_x_on_a_session_toggles_the_mark_and_the_footer_label(self):
         s = session("a", 100.0)
@@ -387,18 +387,18 @@ class SessionStoreTests(unittest.TestCase):
             write_pi(path, "s", role="assistant", stop="stop")
             s = panel.read_session(str(path), "pi")
             self.assertTrue(panel.toggle_session_done(s))
-            with mock.patch.object(panel, "session_files",
+            with mock.patch.object(panel.status, "session_files",
                                    return_value=[(str(path), "pi")]), \
-                    mock.patch.object(panel, "process_table", return_value=[]), \
-                    mock.patch.object(panel, "managed_panes", return_value=[]), \
-                    mock.patch.object(panel, "running_session_processes",
+                    mock.patch.object(panel.procs, "process_table", return_value=[]), \
+                    mock.patch.object(panel.tmuxctl, "managed_panes", return_value=[]), \
+                    mock.patch.object(panel.procs, "running_session_processes",
                                       return_value={}), \
-                    mock.patch.object(panel, "_goals_cache", None):
+                    mock.patch.object(panel.state, "_goals_cache", None):
                 groups = panel.load_groups()
             got = panel.session_index(groups)["s"]
             self.assertEqual(got.status, "done")
             self.assertTrue(got.done)
-            text = "\n".join(panel.list_lines(groups))
+            text = "\n".join(panel.main.list_lines(groups))
             self.assertIn("[done", text)
             self.assertIn("✓", text)
 

@@ -24,7 +24,7 @@ The panel tags its own pane with `@sassy_panel=1` at startup. The launcher binds
 one **free** prefix key (default `N`) to:
 
 ```sh
-panel.py --new-session --pane #{pane_id}
+python3 -m panel --new-session --pane #{pane_id}
 ```
 
 `#{pane_id}` is the pane that was focused when the key fired. The new mode:

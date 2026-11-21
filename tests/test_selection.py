@@ -2,16 +2,11 @@
 """Selection identity tests: the highlight follows a session across re-sorts."""
 from __future__ import annotations
 
-import importlib.util
-import sys
 import unittest
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("sassy_code_panel", ROOT / "panel.py")
-panel = importlib.util.module_from_spec(SPEC)
-sys.modules["sassy_code_panel"] = panel
-SPEC.loader.exec_module(panel)
+from tests.panel_loader import load_panel
+
+panel = load_panel()
 
 
 def session(sid: str, cwd: str, ts: float) -> panel.Session:

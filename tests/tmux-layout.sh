@@ -68,6 +68,28 @@ wait_panels 1 || fail "no live panel in the dedicated session"
 [ "$(t list-panes -t user | wc -l | tr -d ' ')" -eq 1 ] \
   || fail "the user's window was split"
 
+# Scenario 1a: the status line shows the whole session name, then the window
+# list. tmux's default status-left-length (10) clips "sassy-code" and butts the
+# window list against it, so the launcher must widen it for this session. The
+# launcher leaves status-left itself unset, so a user's own format survives.
+footer_left="$(t show-options -t "=sassy-code:" -v status-left 2>/dev/null || true)"
+[ -z "$footer_left" ] \
+  || fail "launcher set status-left itself, overriding a user's format: '$footer_left'"
+footer_len="$(t show-options -t "=sassy-code:" -v status-left-length 2>/dev/null || true)"
+[ -n "$footer_len" ] || footer_len="$(t show-options -gv status-left-length)"
+footer_rendered="$(t display-message -p -t "=sassy-code:" '#{E:status-left}')"
+case "$footer_rendered" in
+  *sassy-code*) ;;
+  *) fail "status-left does not show the session name: '$footer_rendered'" ;;
+esac
+[ "${#footer_rendered}" -le "$footer_len" ] \
+  || fail "status-left clips the session name: '$footer_rendered' is ${#footer_rendered} cols, status-left-length is $footer_len"
+case "$footer_rendered" in
+  *' ') ;;
+  *) fail "status-left runs into the window list: '$footer_rendered'" ;;
+esac
+printf 'PASS: the status line shows the whole session name before the window list\n'
+
 panes="$(t list-panes -t =sassy-code -F '#{pane_id} #{pane_width} left=#{pane_left} cmd=#{pane_current_command}')"
 left="$(printf '%s\n' "$panes" | awk '$3 == "left=0" {print; exit}')"
 right="$(printf '%s\n' "$panes" | awk '$3 != "left=0" {print; exit}')"
@@ -197,15 +219,46 @@ esac
 
 printf 'PASS: cold start creates a narrow left panel beside the wide viewer\n'
 
+# The truly cold first launch must already show the whole name: the session is
+# created before the option is set, so a first run never clips.
+cold_len="$(cold_tmux show-options -t "=sassy-code:" -v status-left-length 2>/dev/null || true)"
+[ -n "$cold_len" ] \
+  || fail "cold start: status-left-length is unset, so the name clips to the default 10"
+cold_rendered="$(cold_tmux display-message -p -t "=sassy-code:" '#{E:status-left}')"
+case "$cold_rendered" in
+  *sassy-code*) ;;
+  *) fail "cold start: status-left does not show the session name: '$cold_rendered'" ;;
+esac
+[ "${#cold_rendered}" -le "$cold_len" ] \
+  || fail "cold start: status-left clips the session name: '$cold_rendered' is ${#cold_rendered} cols, status-left-length is $cold_len"
+printf 'PASS: cold start shows the whole session name on the first launch\n'
+
 # Scenario 3: a panel that fails to start keeps its pane open with the exit
 # status, instead of vanishing and leaving an empty viewer.
 FAIL_DIR="$TMP/failing"
-mkdir -p "$FAIL_DIR"
+mkdir -p "$FAIL_DIR/panel"
 cp "$ROOT/main" "$FAIL_DIR/main"
-printf 'import sys\nsys.exit(3)\n' > "$FAIL_DIR/panel.py"
+: > "$FAIL_DIR/panel/__init__.py"
+# Print the package that actually ran, so the scenario proves it was the fake
+# one and not the repo's package reached through PYTHONPATH.
+printf 'import panel, sys\nprint("fake-panel:" + panel.__file__)\nsys.exit(3)\n' \
+  > "$FAIL_DIR/panel/__main__.py"
+# A decoy package in the launcher's working directory: `python3 -m panel` puts
+# the *caller's* cwd ahead of PYTHONPATH, so a launcher that does not `cd` into
+# its own dir would run this one instead of the fake package above.
+DECOY_DIR="$TMP/decoy"
+mkdir -p "$DECOY_DIR/panel"
+: > "$DECOY_DIR/panel/__init__.py"
+printf 'import panel, sys\nprint("decoy-panel:" + panel.__file__)\nsys.exit(9)\n' \
+  > "$DECOY_DIR/panel/__main__.py"
 t kill-session -t =sassy-code 2>/dev/null || true
-env TMUX="$SOCKET" TMUX_PANE="$VIEWER" TERM="${TERM:-xterm-256color}" \
-  "$FAIL_DIR/main"
+# Run the fake launcher from the decoy dir: the panel must come from the
+# launcher's own `DIR` (the `cd` in PANEL_CMD), never from the caller's cwd.
+(
+  cd "$DECOY_DIR"
+  env TMUX="$SOCKET" TMUX_PANE="$VIEWER" TERM="${TERM:-xterm-256color}" \
+    "$FAIL_DIR/main"
+)
 fail_pane=""
 for _ in $(seq 1 50); do
   fail_pane="$(t list-panes -t =sassy-code -F '#{pane_id} #{pane_left}' \
@@ -216,6 +269,13 @@ for _ in $(seq 1 50); do
   fi
   sleep 0.1
 done
+# The marker (with its own `panel.__file__`) only the fake package prints, so
+# this proves `python3 -m panel` resolved the launcher's own package, not one
+# reachable from the caller's cwd, and not the repo's package via PYTHONPATH.
+t capture-pane -pJ -t "$fail_pane" | grep -Fq 'decoy-panel:' \
+  && fail "failed-panel scenario ran the decoy package from the caller's cwd"
+t capture-pane -pJ -t "$fail_pane" | grep -Fq 'fake-panel:' \
+  || fail "failed-panel scenario ran a package other than the fake one"
 t capture-pane -pJ -t "$fail_pane" | grep -q 'panel exited with status 3' \
   || fail "failed panel did not show its exit status"
 t send-keys -t "$fail_pane" Enter

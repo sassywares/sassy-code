@@ -23,7 +23,7 @@ slice's connector did not line up with its goal name.
 
 ## Solution
 
-One frame loop, `run_picker()` (`panel.py:2666`), and one line-kind contract
+One frame loop, `run_picker()` (`panel.boxes`), and one line-kind contract
 shared by both boxes:
 
 - `lines_for(state)` returns `(text, attribute[, kind])`. A `PICKER_DIVIDER`
@@ -42,7 +42,7 @@ shared by both boxes:
 Both boxes then share the columns: one marker column (`+`, `⌂`, `✓`, or a
 slice's `├`/`└` connector), and a name column where `Top level`, goal names and
 slice names begin, with a slice name following its connector. `new_box_lines()`
-(`panel.py:2532`) and `move_box_lines()` (`panel.py:2928`) only produce lines;
+(`panel.boxes`) and `move_box_lines()` (`panel.boxes`) only produce lines;
 they do not draw.
 
 ## Applicability
