@@ -68,11 +68,16 @@ then the project's newest session's harness, then
 `SASSY_CODE_NEW_HARNESS`, then whichever harness is installed. This avoids
 starting `pi` on a Claude-only machine.
 
-Status keeps its single source of truth (`_infer_status`): tool errors and API
-errors win, then a user or `tool_result` turn, then `tool_use`, then the
-5-minute active window. Claude's `end_turn` / `stop_sequence` / `max_tokens` /
-`refusal` were added to `TERMINAL_STOP_REASONS` so hidden panes are reaped on
-the same grace period as Pi's `stop` / `error` / `aborted`.
+Status is built in two steps. `_infer_status` is the file-only base: tool and
+API errors win, else `idle`. `session_status()` then merges the live process,
+the done mark, and in-memory attention with precedence
+`error > done > in progress > needs input > idle`: a live session is in
+progress while `pending_turn()` sees an unfinished turn, needs input once that
+turn is terminal or before its first message, and a session with no live
+process is idle unless it carries attention or a done mark. Claude's
+`end_turn` / `stop_sequence` / `max_tokens` / `refusal` were added to
+`TERMINAL_STOP_REASONS` so hidden panes are reaped on the same grace period as
+Pi's `stop` / `error` / `aborted`.
 
 Only UUID-named Claude files are sessions. Subagent transcripts are never
 enumerated, and sidechains are excluded from preview/status. Identity fields
@@ -80,8 +85,9 @@ are taken from the main thread even if a sidechain appears first.
 
 Claude transcripts are frequently megabytes long and the panel refreshes every
 two seconds, so `read_session()` caches by path, `mtime_ns`, and size. Callers
-get a copy, and `_infer_status()` is re-run on that copy because the active
-window is clock-relative: an unchanged file still ages from active to idle.
+get a copy whose base status is recomputed by `_infer_status()`, because the
+cached parse is not the rendered status: `load_groups()` merges the live
+process, done mark and attention on every refresh.
 
 `/reload` stays Pi-only: Claude Code has no equivalent action, so
 `reload_managed_panes()` checks `pane_has_pi()` before sending anything.
@@ -148,6 +154,16 @@ The rule, parsed from the main transcript only (`Session.open_tasks`):
   a user entry), a later `enqueue` of identical text is a new instance (a second
   crash emits the same `stopped`) and restarts that position. One notification
   can carry several ids.
+- A `TaskStop` tool result closes the run of the task id it names. The success
+  form is `Successfully stopped task: <id>`; the error form
+  `<tool_use_error>No task found with ID: <id>. Background agents running or
+  waiting: …</tool_use_error>` closes it too, because the task is not running
+  any more (seen in `dd0bc4b7-0ec6-4289-85dc-4c27c69b6949`, whose only closing
+  evidence is that error). The error regex is anchored to the start of the
+  error body so text quoted elsewhere in a result never closes a run. This is
+  the path that closes a run whose only notifications were interim ones: no
+  later non-interim notification ever arrives, so the same `<task-id>` close
+  never happens.
 - An interim notification closes nothing. An agent that stops while its own
   background work still runs notifies with `<summary>Agent "X" is waiting on its
   own background work</summary>` and a `<note>` saying it "stopped with
@@ -159,7 +175,8 @@ The rule, parsed from the main transcript only (`Session.open_tasks`):
   skipped. A final notification does not always follow: a run that only ever got
   an interim one (e.g. the session ended while the agent's own work was still
   running) stays open. That errs toward keeping the hidden pane, which is
-  reaped once its agent process exits (the no-agent-process path).
+  reaped once its agent process exits (the no-agent-process path) or when a
+  `TaskStop` names the run (see above).
 - The notification is often only queued (a `queue-operation` `enqueue`, then
   `remove` or `dequeue`; a `remove` with content drops the queued item with that content, which is not always the oldest, while a `dequeue` or content-less `remove` takes the oldest) and never written as a user entry, which is why queue
   content closes runs too. Duplicate copies are harmless.
@@ -171,16 +188,23 @@ The rule, parsed from the main transcript only (`Session.open_tasks`):
   appends; a `remove` with content drops the first queued item whose content
   matches, and is a no-op if none does; a `dequeue` or content-less `remove`
   drops the oldest; an assistant entry clears the queue; queued input means the
-  queue is non-empty).
-  The main thread has input (often the completion hand-back) it is about to act
-  on, so `is_complete()` stays False.
+  queue is non-empty). Queued input blocks completion (`is_complete()` stays
+  False) but never feeds `pending_turn()`: status follows the turn.
 - While any run is open or input is queued, `is_complete()` is False (never
   reaped from file state). Open runs never expire. A resumed Claude emits a
   `stopped` notification for runs of the dead process, which closes them. Open
-  runs do not make a session `active`: a live session already shows `running`
-  (process table / managed pane), and a dead one with stale open runs reads
-  `idle` instead of `active` forever. The "no agent process in the pane" reap
-  path is unchanged.
+  runs and queued input never feed `pending_turn()` either: they are reaping
+  bookkeeping, not turn state. `pending_turn()` is exactly: `messages == 0` →
+  False; `awaiting_input` → False; `last_role in ("user", "toolResult")` → True;
+  else `last_stop_reason not in TERMINAL_STOP_REASONS`. So a live session whose
+  background run outlives its `end_turn` reads needs input (the user can type),
+  never in progress, and a dead session with stale open runs reads idle instead
+  of in progress forever. The "no agent process in the pane" reap path is unchanged,
+  but it is now gated through `pane_is_live()`: a tagged pane with no agent
+  descendant is a leftover shell, not a live session, while an empty process
+  snapshot (a failed or timed-out `ps`) is *unknown* and falls back to the
+  tag-only answer rather than declaring every session dead and reaping every
+  hidden pane.
 - Slash-command echoes (`<command-...>`) are not turns, so `/model` after an
   `end_turn` leaves the session complete; a command with args still supplies
   the title, a bare one does not.

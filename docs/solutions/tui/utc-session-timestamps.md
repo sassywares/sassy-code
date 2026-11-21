@@ -11,8 +11,8 @@ updated: 2026-10-23
 Every age in the panel was off by the machine's UTC offset. A session created
 seconds ago displayed `5h` on a `UTC+5` machine, and after `/handoff` the new
 session showed the same age as the session it replaced, because both were
-shifted into the same bucket. Any rule that compares activity times — the 5
-minute **active** window, sorting, handoff detection — inherited the shift.
+shifted into the same bucket. Any rule that compares activity times — sorting,
+handoff detection — inherited the shift.
 
 ## Root cause
 
@@ -43,7 +43,8 @@ return dt.timestamp()
 ```
 
 The panel renders `rel_time()` from these epochs; comparing `last_ts` values now
-also makes cross-session decisions (active window, handoff successors) correct.
+also makes cross-session decisions (ordering by activity, handoff successors)
+correct.
 
 ## Prevention
 

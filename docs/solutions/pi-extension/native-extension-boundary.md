@@ -40,10 +40,10 @@ So there are two viable designs:
   the list with `ctx.ui.custom()` and drives the right pane through tmux. This
   keeps the two-pane feel but makes the panel a full Pi process.
 
-`SessionInfo` does **not** carry `stopReason` or `isError`, so the `error` and
-`active` statuses still require reading a file's tail, and `running` still
-requires a process-table or tmux check. Neither `listAll` nor `switchSession`
-provides those.
+`SessionInfo` does **not** carry `stopReason` or `isError`, so the `error` base
+and the finished-turn test (`pending_turn()`) still require reading a file's
+tail, and telling in progress from needs input still requires a process-table
+or tmux check. Neither `listAll` nor `switchSession` provides those.
 
 ## Applicability
 

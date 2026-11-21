@@ -10,6 +10,7 @@ SOCKET_PATH=""
 COLD_DIR=""
 COLD_HOME=""
 COLD_CONFIG=""
+BRACKET_OUT=""
 
 cleanup() {
   if [ -n "$SOCKET_PATH" ]; then
@@ -26,6 +27,9 @@ cleanup() {
       rm -rf "$dir"
     fi
   done
+  if [ -n "$BRACKET_OUT" ]; then
+    rm -f "$BRACKET_OUT"
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -133,3 +137,25 @@ case "$CUSTOM_AFTER" in
 esac
 
 printf 'PASS: a taken shortcut key is left alone\n'
+
+# Scenario 4: literal `[` and `]` bytes written to a pane's pty arrive unchanged.
+# `send-keys -l` writes raw bytes straight to the pty, so this only proves the
+# pty passes bracket bytes through verbatim. It does NOT cover key-table
+# resolution or extended-key encoding: nothing here goes through the terminal
+# encoder, so it cannot catch a `[`/`]` prefix-binding conflict or a CSI-u
+# rewrite (the extended-keys options are asserted in scenario 1). The panel's
+# `[`/`]` tier behaviour is covered by the unit dispatch tests in
+# tests/test_goal_lifecycle.py.
+BRACKET_OUT="$(mktemp)"
+tmux -L "$LABEL" new-window -d -t =sassy-code-test -n bracket-keys \
+  "OUT='$BRACKET_OUT' python3 -c 'import os,sys; open(os.environ[\"OUT\"], \"w\").write(sys.stdin.read(2))'"
+tmux -L "$LABEL" send-keys -t =sassy-code-test:bracket-keys -l '['
+tmux -L "$LABEL" send-keys -t =sassy-code-test:bracket-keys -l ']'
+tmux -L "$LABEL" send-keys -t =sassy-code-test:bracket-keys Enter
+for _ in $(seq 1 20); do
+  [ "$(cat "$BRACKET_OUT" 2>/dev/null)" = '[]' ] && break
+  sleep 0.1
+done
+[ "$(cat "$BRACKET_OUT" 2>/dev/null)" = '[]' ] \
+  || fail "literal bracket bytes did not reach the pane: $(cat "$BRACKET_OUT" 2>/dev/null)"
+printf 'PASS: literal bracket bytes reach the pane unchanged\n'

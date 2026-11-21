@@ -129,6 +129,22 @@ class CommandTests(GoalStoreCase):
         self.assertEqual(text, "unknown command: nonsense")
         self.assertIsNone(goal)
 
+    def test_slice_create_command_targets_the_highlighted_goal(self):
+        goal = panel.create_goal("/p", "Goal")
+        text, node = panel.run_command("slice:create Phase two", "/p", goal)
+        self.assertIn("created slice", text)
+        self.assertEqual(node.parent, goal.id)
+        panel._goals_cache = None
+        self.assertEqual(len(panel.load_goals()[0]["/p"]), 2)
+        # On a slice, the new slice is a sibling under the same parent.
+        text, sibling = panel.run_command(
+            "slice:create Phase three", "/p", node, "slice"
+        )
+        self.assertEqual(sibling.parent, goal.id)
+        text, refused = panel.run_command("slice:create x", "/p", None)
+        self.assertIn("highlight a goal", text)
+        self.assertIsNone(refused)
+
     def test_no_project(self):
         text, goal = panel.run_command("goal:create x", None)
         self.assertTrue(text)
@@ -280,7 +296,6 @@ class RowTests(unittest.TestCase):
         self.assertEqual(idx, -1)  # never a cursor stop
         self.assertEqual(text.strip(), panel.goal_hint(g, g.goals[1]))
         goal_idx = [i for i, it in enumerate(items) if it[0] == "goal"][0]
-        self.assertEqual(panel.goal_hint(g, g.goals[1]), panel.goal_hint(g, g.goals[1]))
         for h in panel.GOAL_HINTS:
             self.assertRegex(h, r"\bn\b")
         self.assertEqual(sum(1 for it in items if it[0] == "goal"), 2)
@@ -322,6 +337,87 @@ class RowTests(unittest.TestCase):
         # more empty goals than lines wraps instead of failing
         self.assertIn(panel.goal_hint(g, g.goals[-1]), panel.GOAL_HINTS)
         self.assertGreaterEqual(len(panel.GOAL_HINTS), 12)
+
+    def test_goal_holding_only_slices_gets_no_hint(self):
+        g = panel.Group("/p", [])
+        parent = goal("g1", "Parent", 10.0)
+        child = goal("s1", "Slice", 20.0)
+        child.parent = parent.id
+        g.goals = [parent, child]
+        items = list(panel.rows_for([g], ""))
+        lines, _, _ = panel.build_lines(items, 60, set(), "")
+        hints = [(t.strip(), i) for i, (t, k, _) in enumerate(lines)
+                 if k == "hint"]
+        self.assertEqual(hints, [(panel.goal_hint(g, child), 3)])
+        self.assertEqual(lines[2][1], "slice")
+
+    def test_empty_slice_gets_a_hint(self):
+        g = panel.Group("/p", [])
+        parent = goal("g1", "Parent", 10.0)
+        child = goal("s1", "Slice", 20.0)
+        child.parent = parent.id
+        g.goals = [parent, child]
+        lines, _, _ = panel.build_lines(
+            list(panel.rows_for([g], "")), 60, set(), ""
+        )
+        hints = [t for t, k, _ in lines if k == "hint"]
+        self.assertEqual([t.strip() for t in hints],
+                         [panel.goal_hint(g, child)])
+        slice_text = next(t for t, k, _ in lines if k == "slice")
+        self.assertEqual(hints[0].index(panel.goal_hint(g, child)),
+                         slice_text.index("Slice"))
+
+    def test_max_length_hint_fits_panel_width_at_every_depth(self):
+        w = 20
+        longest = max(panel.GOAL_HINTS, key=panel.display_width)
+        self.assertGreater(panel.display_width(longest), w)
+        expected = {}
+        for depth in (0, 1, 2):
+            budget = max(4, w - panel.NAME_COL[depth] - 3)
+            expected[depth] = (
+                " " * panel.NAME_COL[depth]
+                + panel.truncate_cols(longest, budget)
+            )
+            self.assertLessEqual(panel.display_width(expected[depth]), w - 1)
+            self.assertTrue(expected[depth].endswith("…"))
+
+        # A goal hint at depth 1 and a slice hint at depth 2 use the longest
+        # GOAL_HINTS line (ids chosen so crc32 picks index 11).
+        for gid, depth in (("g0", 1), ("s30", 2)):
+            g = panel.Group("/p", [])
+            if depth == 1:
+                g.goals = [goal(gid, "Empty", 10.0)]
+            else:
+                parent = goal("parent", "Parent", 10.0)
+                child = goal(gid, "Slice", 20.0)
+                child.parent = parent.id
+                g.goals = [parent, child]
+            lines, _, _ = panel.build_lines(
+                list(panel.rows_for([g], "")), w, set(), ""
+            )
+            text = next(t for t, k, _ in lines if k == "hint")
+            self.assertEqual(text, expected[depth])
+            self.assertLessEqual(panel.display_width(text), w - 1)
+
+    def test_hint_lines_are_unique_per_project_and_stable(self):
+        g = panel.Group("/p", [])
+        parent = goal("g1", "Parent", 10.0)
+        first = goal("s1", "First", 20.0)
+        first.parent = parent.id
+        second = goal("s2", "Second", 30.0)
+        second.parent = parent.id
+        g.goals = [parent, first, second, goal("g2", "Empty", 40.0)]
+
+        def hints():
+            lines, _, _ = panel.build_lines(
+                list(panel.rows_for([g], "")), 60, set(), ""
+            )
+            return [t.strip() for t, k, _ in lines if k == "hint"]
+
+        first_refresh = hints()
+        self.assertEqual(len(first_refresh), 3)
+        self.assertEqual(len(set(first_refresh)), 3)
+        self.assertEqual(hints(), first_refresh)
 
     def test_collapsed_goal_shows_arrow_and_no_hint(self):
         g = self.group()
@@ -534,8 +630,9 @@ class NestingTests(unittest.TestCase):
         self.assertNotIn("⏎ present", goal_items)
         self.assertEqual(
             panel.footer_items(("session", g, g.sessions[0])),
-            panel.FOOTER_ITEMS,
+            panel.SESSION_FOOTER_ITEMS,
         )
+        self.assertIn("x done", panel.SESSION_FOOTER_ITEMS)
         self.assertEqual(panel.footer_items(None), panel.FOOTER_ITEMS)
         self.assertEqual(
             goal_items,
@@ -667,6 +764,24 @@ class InheritanceTests(GoalStoreCase):
         self.assertEqual(self.members(g, goal.id), set())
         self.assertIsNone(panel.goal_of_session(g, "child"))
 
+    def test_explicit_loose_sticks_for_a_successor(self):
+        self.write("root")
+        goal = self.file_goal("Auth", "root")
+        panel.move_session(self.cwd, "root", None)
+        self.write("child", parent="root")
+        g = self.group()
+        self.assertEqual(self.members(g, goal.id), set())
+        self.assertIsNone(panel.goal_of_session(g, "root"))
+        self.assertIsNone(panel.goal_of_session(g, "child"))
+
+    def test_moved_membership_is_inherited_as_the_goal(self):
+        self.write("root")
+        goal = self.file_goal("Auth")
+        panel.move_session(self.cwd, "root", goal.id)
+        self.write("child", parent="root")
+        g = self.group()
+        self.assertEqual(self.members(g, goal.id), {"root", "child"})
+
     def test_missing_parent_file_stays_loose(self):
         goal = self.file_goal("Auth", "gone")
         self.write("orphan", parent="gone")
@@ -740,7 +855,7 @@ class DenseTests(unittest.TestCase):
     def sess(self, sid, ts, running=False):
         s = session(sid, "/p", ts)
         if running:
-            s.status = "running"
+            s.status = "in_progress"
         return s
 
     def group(self, sessions, goals=()):
@@ -774,12 +889,12 @@ class DenseTests(unittest.TestCase):
 
     def test_running_loose_pulled_past_project_limit(self):
         loose = [self.sess(f"l{i}", 1000 - i) for i in range(7)]
-        loose[6].status = "running"
+        loose[6].status = "in_progress"
         ids = self.ids(self.group(loose))
         self.assertIn("l6", ids)
         self.assertNotIn("l5", ids)
         rows = list(panel.rows_for([self.group(loose)], ""))
-        self.assertEqual(rows[-1][2], 1)
+        self.assertEqual(rows[-1][2], (1, False))
 
     def test_goal_with_running_member_pulled_past_project_limit(self):
         loose = [self.sess(f"l{i}", 1000 - i) for i in range(6)]
@@ -798,13 +913,13 @@ class DenseTests(unittest.TestCase):
             self.ids(g), ["G:g", "m0", "m1", "m2", "goal_more"]
         )
         rows = list(panel.rows_for([g], ""))
-        self.assertEqual(rows[-1][2], (gl, 2))
-        full = self.ids(g, expanded={"g"})
+        self.assertEqual(rows[-1][2], (gl, 2, False))
+        full = self.ids(g, expanded={"g": 1})
         self.assertEqual(full, ["G:g", "m0", "m1", "m2", "m3", "m4", "goal_more"])
 
     def test_running_pulled_past_goal_limit_in_order(self):
         m = [self.sess(f"m{i}", 100 - i) for i in range(6)]
-        m[4].status = "running"
+        m[4].status = "in_progress"
         gl = goal("g", "G", 1.0, [s.id for s in m])
         ids = self.ids(self.group(m, [gl]))
         self.assertEqual(ids, ["G:g", "m0", "m1", "m2", "m4", "goal_more"])
@@ -831,7 +946,7 @@ class DenseTests(unittest.TestCase):
         m = [self.sess("m0", 5, running=True), self.sess("m1", 4)]
         gl = goal("g", "Name", 1.0, ["m0", "m1"], collapsed=True)
         text = self.lines(self.group(m, [gl]))[1][0]
-        self.assertTrue(text.startswith("   ▸ ● Name"), text)
+        self.assertTrue(text.startswith("   ▸ Name  (2) ●"), text)
         self.assertLessEqual(panel.display_width(text), 29)
         gl.collapsed = False
         text = self.lines(self.group(m, [gl]))[1][0]
@@ -846,9 +961,9 @@ class DenseTests(unittest.TestCase):
         gl = goal("g", "G", 1.0, [s.id for s in m])
         g = self.group(m, [gl])
         self.assertTrue(self.lines(g)[-1][0].strip().startswith("… 2 more"))
-        self.assertTrue(
-            self.lines(g, expanded={"g"})[-1][0].strip().startswith("… show fewer")
-        )
+        items = list(panel.rows_for([g], "", expanded={"g": 1}))
+        full = panel.build_lines(items, 30, set(), "")[0]
+        self.assertTrue(full[-1][0].strip().startswith("… show fewer"))
 
     def test_goal_more_key_and_cursor_follow(self):
         m = [self.sess(f"m{i}", 100 - i) for i in range(5)]
@@ -870,32 +985,498 @@ class DenseTests(unittest.TestCase):
         self.assertEqual(rows3[panel.cursor_for_key(rows3, hidden)][0], "goal")
         self.assertEqual(panel.new_session_plan(rows[-1])[1], "g")
 
+    def test_project_tiers_double_from_the_base_limit(self):
+        loose = [self.sess(f"l{i}", 1000 - i) for i in range(100)]
+        g = self.group(loose)
+        base = panel.SESSION_LIMIT
+        seen = []
+        payloads = {0: (95, False), 4: (0, True)}
+        for level in range(5):
+            rows = list(panel.rows_for([g], "", expanded={"/p": level}))
+            shown = [x.id for k, _, x in rows if k == "session"]
+            seen.append(len(shown))
+            self.assertEqual(
+                len(shown), min(len(loose), panel.tier_cap(base, level))
+            )
+            self.assertEqual(rows[-1][0], "more")
+            if level in payloads:
+                self.assertEqual(rows[-1][2], payloads[level])
+        self.assertEqual(seen, [5, 15, 35, 75, 100])
+
+    def test_goal_tiers_double_from_the_goal_limit(self):
+        members = [self.sess(f"m{i}", 100 - i) for i in range(10)]
+        gl = goal("g", "G", 1.0, [s.id for s in members])
+        g = self.group(members, [gl])
+        base = panel.GOAL_SESSION_LIMIT
+        payloads = {0: (gl, 7, False), 2: (gl, 0, True)}
+        for level in range(3):
+            rows = list(panel.rows_for([g], "", expanded={"g": level}))
+            shown = [x.id for k, _, x in rows if k == "session"]
+            self.assertEqual(
+                len(shown), min(len(members), panel.tier_cap(base, level))
+            )
+            self.assertEqual(rows[-1][0], "goal_more")
+            if level in payloads:
+                self.assertEqual(rows[-1][2], payloads[level])
+
+    def test_more_row_persists_as_show_fewer_when_all_are_shown(self):
+        loose = [self.sess(f"l{i}", 1000 - i) for i in range(10)]
+        g = self.group(loose)
+        rows = list(panel.rows_for([g], "", expanded={"/p": 2}))
+        self.assertEqual(rows[-1][0], "more")
+        self.assertEqual(rows[-1][2], (0, True))
+        lines, _, _ = panel.build_lines(rows, 40, set(), "")
+        self.assertEqual(lines[-1][0].strip(), "… show fewer")
+
+    def test_no_more_row_at_the_base_tier_when_nothing_is_hidden(self):
+        loose = [self.sess(f"l{i}", 1000 - i) for i in range(7)]
+        loose[5].status = "in_progress"
+        loose[6].status = "in_progress"
+        g = self.group(loose)
+        rows = list(panel.rows_for([g], ""))
+        self.assertEqual(
+            [r[0] for r in rows], ["group"] + ["session"] * 7
+        )
+        # A raised tier still offers `show fewer` and can step back down.
+        rows = list(panel.rows_for([g], "", expanded={"/p": 1}))
+        self.assertEqual(rows[-1][2], (0, True))
+        lines, _, _ = panel.build_lines(rows, 40, set(), "")
+        self.assertEqual(lines[-1][0].strip(), "… show fewer")
+
+    def test_running_session_is_pulled_through_the_current_tier(self):
+        loose = [self.sess(f"l{i}", 1000 - i) for i in range(40)]
+        loose[20].status = "in_progress"
+        g = self.group(loose)
+        rows0 = list(panel.rows_for([g], ""))
+        shown0 = [x.id for k, _, x in rows0 if k == "session"]
+        self.assertEqual(len(shown0), panel.SESSION_LIMIT + 1)
+        self.assertIn("l20", shown0)
+        rows1 = list(panel.rows_for([g], "", expanded={"/p": 1}))
+        shown1 = [x.id for k, _, x in rows1 if k == "session"]
+        self.assertEqual(len(shown1), panel.tier_cap(panel.SESSION_LIMIT, 1) + 1)
+        self.assertIn("l14", shown1)
+        self.assertIn("l20", shown1)
+        self.assertNotIn("l15", shown1)
+        self.assertEqual(rows1[-1][2], (len(loose) - len(shown1), False))
+
+    def test_tier_cursor_landing(self):
+        loose = [self.sess(f"l{i}", 1000 - i) for i in range(10)]
+        g = self.group(loose)
+        tiers = {}
+        before = list(panel.rows_for([g], "", expanded=tiers))
+        more_index = next(
+            i for i, item in enumerate(before) if item[0] == "more"
+        )
+        panel.tier_up(tiers, "/p")
+        after = list(panel.rows_for([g], "", expanded=tiers))
+        added = panel.first_added_key(before, after, more_index)
+        self.assertEqual(added, ("session", "l5", "/p"))
+        self.assertEqual(panel.cursor_for_key(after, added), more_index)
+        panel.tier_down(tiers, "/p")
+        hidden = list(panel.rows_for([g], "", expanded=tiers))
+        self.assertEqual(
+            hidden[panel.cursor_for_key(hidden, ("more", "/p"))][0], "more"
+        )
+
+
+
+def node(gid: str, name: str, created: float, sessions=(), parent="",
+         done=False, collapsed=False):
+    return panel.Goal(gid, name, created, done, collapsed, list(sessions), parent)
+
+
+class SliceStoreTests(GoalStoreCase):
+    def records(self):
+        return json.loads(self.file.read_text())["projects"]["/p"]
+
+    def test_create_slice_round_trip_keeps_parent(self):
+        goal = panel.create_goal("/p", "Goal")
+        sl = panel.create_slice("/p", goal.id, "  Phase   two ")
+        rec = self.records()[1]
+        self.assertEqual(rec["parent"], goal.id)
+        self.assertEqual(rec["name"], "Phase two")
+        panel._goals_cache = None
+        loaded = panel.load_goals()[0]["/p"][1]
+        self.assertEqual((loaded.id, loaded.parent), (sl.id, goal.id))
+
+    def test_old_file_without_parent_loads_as_top_level(self):
+        self.file.parent.mkdir(parents=True)
+        self.file.write_text(json.dumps({"version": 1, "projects": {"/p": [
+            {"id": "old", "name": "Old", "created": 1, "done": False,
+             "collapsed": False, "sessions": []},
+        ]}}))
+        panel._goals_cache = None
+        goals, bad = panel.load_goals()
+        self.assertFalse(bad)
+        g = panel.Group("/p", [], goals["/p"])
+        self.assertEqual(goals["/p"][0].parent, "")
+        self.assertEqual([x.id for x in panel.goal_roots(g)], ["old"])
+
+    def test_unknown_parent_is_top_level_and_cycles_terminate(self):
+        self.file.parent.mkdir(parents=True)
+        self.file.write_text(json.dumps({"version": 1, "projects": {"/p": [
+            {"id": "orphan", "name": "Orphan", "created": 1, "parent": "gone",
+             "sessions": []},
+            {"id": "a", "name": "A", "created": 2, "parent": "b",
+             "sessions": []},
+            {"id": "b", "name": "B", "created": 3, "parent": "a",
+             "sessions": []},
+        ]}}))
+        panel._goals_cache = None
+        goals, bad = panel.load_goals()
+        self.assertFalse(bad)
+        g = panel.Group("/p", [], goals["/p"])
+        roots = {x.id for x in panel.goal_roots(g)}
+        self.assertIn("orphan", roots)
+        self.assertEqual(len(roots & {"a", "b"}), 1)
+        self.assertEqual(
+            {x.id for x in panel.goal_subtree_goals(g, goals["/p"][1])},
+            {"a", "b"},
+        )
+
+    def test_slice_names_are_unique_only_within_their_parent(self):
+        one = panel.create_goal("/p", "One")
+        two = panel.create_goal("/p", "Two")
+        panel.create_slice("/p", one.id, "Phase")
+        with self.assertRaises(panel.GoalError):
+            panel.create_slice("/p", one.id, "phase")
+        other = panel.create_slice("/p", two.id, "Phase")
+        self.assertEqual(other.parent, two.id)
+        top = panel.create_goal("/p", "Phase")
+        self.assertEqual(top.parent, "")
+        self.assertEqual(len(self.records()), 5)
+
+    def test_create_slice_needs_a_live_top_level_parent(self):
+        goal = panel.create_goal("/p", "Goal")
+        sl = panel.create_slice("/p", goal.id, "Slice")
+        with self.assertRaises(panel.GoalError):
+            panel.create_slice("/p", sl.id, "Nested")
+        with self.assertRaises(panel.GoalError):
+            panel.create_slice("/p", "gone", "Orphan")
+        self.assertEqual(len(self.records()), 2)
+
+    def test_goal_delete_cascades_to_slices_and_flattens_sessions(self):
+        goal = panel.create_goal("/p", "Goal")
+        sl = panel.create_slice("/p", goal.id, "Slice")
+        panel.file_session_in_goal("/p", goal.id, "direct")
+        panel.file_session_in_goal("/p", sl.id, "inside")
+        panel.delete_goal("/p", goal.id)
+        self.assertEqual(self.records(), [])
+
+    def test_slice_delete_keeps_its_parent_and_flattens_its_sessions(self):
+        goal = panel.create_goal("/p", "Goal")
+        sl = panel.create_slice("/p", goal.id, "Slice")
+        panel.file_session_in_goal("/p", goal.id, "direct")
+        panel.file_session_in_goal("/p", sl.id, "inside")
+        panel.delete_goal("/p", sl.id)
+        records = self.records()
+        self.assertEqual([r["id"] for r in records], [goal.id])
+        self.assertEqual(records[0]["sessions"], ["direct"])
+
+    def test_slice_rename_is_unique_within_parent(self):
+        goal = panel.create_goal("/p", "Goal")
+        one = panel.create_slice("/p", goal.id, "One")
+        panel.create_slice("/p", goal.id, "Two")
+        with self.assertRaises(panel.GoalError):
+            panel.rename_goal("/p", one.id, "two")
+        panel.rename_goal("/p", one.id, "one")
+
+
+class SliceRowTests(unittest.TestCase):
+    def group(self):
+        sessions = [
+            session("l1", "/p", 300.0),
+            session("d1", "/p", 100.0),
+            session("a1", "/p", 500.0),
+            session("a2", "/p", 50.0),
+            session("b1", "/p", 200.0),
+        ]
+        g = panel.Group("/p", sorted(sessions, key=lambda s: -s.last_ts))
+        g.goals = [
+            node("g1", "GoalName", 1.0, ["d1"]),
+            node("s1", "SliceName", 2.0, ["a1", "a2"], parent="g1"),
+            node("s2", "OtherSlice", 3.0, ["b1"], parent="g1"),
+        ]
+        return g
+
+    def rows(self, g, flt="", **kw):
+        return list(panel.rows_for([g], flt, **kw))
+
+    def kinds(self, g, flt="", **kw):
+        return [(k, getattr(x, "id", None)) for k, _, x in self.rows(g, flt, **kw)]
+
+    def test_nesting_project_goal_slice_session(self):
+        g = self.group()
+        self.assertEqual(
+            self.kinds(g),
+            [("group", None), ("goal", "g1"), ("slice", "s1"),
+             ("session", "a1"), ("session", "a2"), ("slice", "s2"),
+             ("session", "b1"), ("session", "d1"), ("session", "l1")],
+        )
+
+    def test_goal_counts_ages_and_ranks_by_its_subtree(self):
+        g = self.group()
+        lines, _, _ = panel.build_lines(self.rows(g), 60, set(), "")
+        goal_line = next(t for t, k, _ in lines if k == "goal")
+        self.assertIn("(4)", goal_line)  # d1 + a1 + a2 + b1
+        self.assertTrue(goal_line.rstrip().endswith(panel.rel_time(500.0)))
+        # Goal ranks by a1 (500) above loose l1 (300).
+        self.assertEqual(self.kinds(g)[1], ("goal", "g1"))
+
+    def test_rollup_precedence_and_done_mark_after_count(self):
+        g = self.group()
+        g.goals[0].collapsed = True
+        a1 = next(s for s in g.sessions if s.id == "a1")
+        a1.status = "needs_input"
+        text = next(t for t, k, _ in panel.build_lines(
+            self.rows(g), 60, set(), "")[0] if k == "goal")
+        self.assertIn("(4) ◐", text)
+        a1.status = "in_progress"
+        text = next(t for t, k, _ in panel.build_lines(
+            self.rows(g), 60, set(), "")[0] if k == "goal")
+        self.assertIn("(4) ●", text)
+        a1.status = "error"
+        g.goals[0].done = True
+        text = next(t for t, k, _ in panel.build_lines(
+            self.rows(g), 60, set(), "")[0] if k == "goal")
+        self.assertIn("(4) ✗ ✓", text)
+
+    def test_project_counts_a_goal_with_slices_once(self):
+        loose = [session(f"l{i}", "/p", 1000.0 - i) for i in range(4)]
+        g = panel.Group("/p", loose)
+        g.goals = [
+            node("g", "Goal", 1.0, ["d"]),
+            node("s", "Slice", 2.0, ["x"], parent="g"),
+        ]
+        g.sessions.extend([session("d", "/p", 10.0),
+                           session("x", "/p", 11.0)])
+        self.assertEqual(
+            [k for k, _ in self.kinds(g)],
+            ["group", "session", "session", "session", "session",
+             "goal", "slice", "session", "session"],
+        )
+        self.assertNotIn("more", [k for k, _ in self.kinds(g)])
+
+    def test_goal_children_tier_from_three_and_slice_sessions_separately(self):
+        sessions = [session(f"c{i}", "/p", 100.0 - i) for i in range(2)]
+        slices = [node(f"s{i}", f"S{i}", i + 1,
+                       sessions=[f"x{i}{j}" for j in range(2)],
+                       parent="g") for i in range(3)]
+        extra = [session(f"x{i}{j}", "/p", 50.0 - j) for i in range(3)
+                 for j in range(2)]
+        g = panel.Group("/p", sessions + extra)
+        g.goals = [node("g", "Goal", 1.0, ["c0", "c1"])] + slices
+        base = self.kinds(g)
+        self.assertEqual(base[-1], ("goal_more", None))
+        self.assertNotIn(("slice", "s2"), base)  # 5 children, 3 shown
+        expanded = self.kinds(g, expanded={"g": 1})
+        self.assertIn(("slice", "s2"), expanded)
+        rows_expanded = self.rows(g, expanded={"g": 1})
+        more = next(r for r in rows_expanded if r[0] == "goal_more")
+        self.assertEqual(more[2][1:], (0, True))
+        # Slice s0 has two sessions: no slice_more yet; add a third.
+        g.goals[1].sessions.extend(["x00b", "x00c"])
+        g.sessions.extend([session("x00b", "/p", 1.0),
+                           session("x00c", "/p", 0.5)])
+        rows = self.kinds(g, expanded={"g": 1, "s0": 0})
+        self.assertIn(("slice_more", None), rows)
+        full = self.kinds(g, expanded={"g": 1, "s0": 1})
+        self.assertIn(("slice", "s2"), full)
+        full_rows = self.rows(g, expanded={"g": 1, "s0": 1})
+        more = next(r for r in full_rows if r[0] == "slice_more")
+        self.assertEqual(more[2][1:], (0, True))  # stays as show fewer
+
+    def test_slice_session_limit_is_three(self):
+        members = [session(f"m{i}", "/p", 100.0 - i) for i in range(5)]
+        g = panel.Group("/p", members)
+        g.goals = [node("g", "Goal", 1.0),
+                   node("s", "Slice", 2.0, [m.id for m in members],
+                        parent="g")]
+        rows = self.rows(g)
+        self.assertEqual(
+            [k for k, _, _ in rows],
+            ["group", "goal", "slice", "session", "session", "session",
+             "slice_more"],
+        )
+        self.assertEqual(rows[-1][2], (g.goals[1], 2, False))
+        full = self.rows(g, expanded={"s": 1})
+        self.assertEqual(
+            [x.id for k, _, x in full if k == "session"],
+            [m.id for m in members],
+        )
+
+    def test_filter_matches_slices_and_expands_both_levels(self):
+        members = [session(f"m{i}", "/p", 100.0 - i) for i in range(5)]
+        g = panel.Group("/p", members)
+        g.goals = [node("g", "Goal", 1.0, collapsed=True),
+                   node("s", "Phase two", 2.0, [m.id for m in members],
+                        parent="g", collapsed=True)]
+        self.assertEqual(
+            self.kinds(g, "phase"),
+            [("group", None), ("goal", "g"), ("slice", "s")]
+            + [("session", m.id) for m in members],
+        )
+        g.sessions[3].name = "unique title"
+        self.assertEqual(
+            self.kinds(g, "unique"),
+            [("group", None), ("goal", "g"), ("slice", "s"),
+             ("session", "m3")],
+        )
+        self.assertEqual(self.kinds(g, "zzz"), [])
+
+    def test_done_session_sinks_inside_its_slice(self):
+        g = self.group()
+        a1 = next(s for s in g.sessions if s.id == "a1")
+        a1.status = "done"
+        slice_rows = [x.id for k, _, x in self.rows(g) if k == "session"
+                      and x.id in {"a1", "a2"}]
+        self.assertEqual(slice_rows, ["a2", "a1"])
+
+    def test_slice_tier_reveal_lands_on_the_first_new_row(self):
+        members = [session(f"m{i}", "/p", 100.0 - i) for i in range(5)]
+        g = panel.Group("/p", members)
+        g.goals = [node("g", "Goal", 1.0),
+                   node("s", "Slice", 2.0, [m.id for m in members],
+                        parent="g")]
+        tiers = {}
+        before = self.rows(g, expanded=tiers)
+        more_index = next(i for i, r in enumerate(before)
+                          if r[0] == "slice_more")
+        panel.tier_up(tiers, "s")
+        after = self.rows(g, expanded=tiers)
+        added = panel.first_added_key(before, after, more_index)
+        self.assertEqual(added, ("session", "m3", "/p"))
+        self.assertEqual(panel.cursor_for_key(after, added), more_index)
+        panel.tier_down(tiers, "s")
+        hidden = self.rows(g, expanded=tiers)
+        self.assertEqual(
+            hidden[panel.cursor_for_key(hidden, ("slice_more", "s", "/p"))][0],
+            "slice_more",
+        )
+
+    def test_filter_on_goal_name_shows_its_slices(self):
+        g = self.group()
+        g.goals[0].collapsed = True
+        self.assertEqual(
+            self.kinds(g, "GoalName"),
+            [("group", None), ("goal", "g1"), ("slice", "s1"),
+             ("session", "a1"), ("session", "a2"), ("slice", "s2"),
+             ("session", "b1"), ("session", "d1")],
+        )
+
+    def test_columns_align_to_container_names(self):
+        g = self.group()
+        lines, _, _ = panel.build_lines(self.rows(g), 70, set(), "")
+        by_kind = {}
+        for text, kind, _ in lines:
+            by_kind.setdefault(kind, []).append(text)
+        loose = next(t for t in by_kind["session"] if t.startswith(" ·")
+                     or t.startswith(" ◐") or t.startswith(" ●")
+                     or t.startswith(" ✗"))
+        goal_line = next(t for t in by_kind["goal"] if "GoalName" in t)
+        slice_line = next(t for t in by_kind["slice"] if "SliceName" in t)
+        self.assertEqual(goal_line.index("GoalName"), 5)
+        self.assertEqual(slice_line.index("SliceName"), 8)
+        self.assertEqual(goal_line.index("▾"), loose.index("π"))
+        direct = next(t for t in by_kind["session"] if "d1" in t)
+        nested = next(t for t in by_kind["session"] if "a1" in t)
+        self.assertEqual(direct.index(panel.STATUS["idle"][0]), 5)
+        self.assertEqual(nested.index(panel.STATUS["idle"][0]), 8)
+        self.assertEqual(loose.index(panel.STATUS["idle"][0]), 1)
+
+    def test_list_nests_slices_and_counts_the_subtree(self):
+        g = self.group()
+        out = panel.list_lines([g])
+        joined = "\n".join(out)
+        self.assertRegex(joined, r"(?m)^  ▾ GoalName  \(4\)$")
+        self.assertRegex(joined, r"(?m)^    ▾ SliceName  \(2\)$")
+        self.assertRegex(joined, r"(?m)^      .*  a1$")
+        self.assertRegex(joined, r"(?m)^    .*  d1$")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
-class HarnessPickerTests(unittest.TestCase):
+class NewBoxTests(GoalStoreCase):
     BOTH = ["pi", "claude"]
 
-    def row(self, kind):
+    def row(self, kind, item=None):
         g = panel.Group(cwd="/p", sessions=[session("a", "/p", 1.0)])
-        return (kind, g, None)
+        return (kind, g, item)
+
+    def tree(self):
+        loose = session("loose", "/p", 1.0)
+        member = session("member", "/p", 2.0)
+        g = panel.Group(cwd="/p", sessions=[member, loose])
+        gl = panel.Goal("g1", "G", 0.5, sessions=["member"])
+        sl = panel.Goal("s1", "S", 0.4, parent="g1")
+        g.goals = [gl, sl]
+        return g, gl, sl, loose, member
 
     def test_decision_by_row_kind(self):
         for kind, expected in (
-            ("group", True), ("goal", True), ("session", False),
-            ("goal_more", False), ("more", False),
+            ("group", True), ("goal", True), ("slice", True),
+            ("session", False), ("goal_more", False), ("slice_more", False),
+            ("more", False),
         ):
             self.assertEqual(
-                panel.should_pick_harness(self.row(kind), self.BOTH),
+                panel.should_open_new_box(self.row(kind), self.BOTH),
                 expected, kind,
             )
-        self.assertFalse(panel.should_pick_harness(None, self.BOTH))
+        self.assertFalse(panel.should_open_new_box(None, self.BOTH))
 
-    def test_single_harness_skips(self):
-        self.assertFalse(panel.should_pick_harness(self.row("group"), ["pi"]))
-        self.assertFalse(panel.should_pick_harness(self.row("group"), []))
+    def test_one_harness_still_opens_on_project_and_goal_rows(self):
+        for kind in ("group", "goal"):
+            self.assertTrue(
+                panel.should_open_new_box(self.row(kind), ["pi"]), kind
+            )
+            self.assertTrue(
+                panel.should_open_new_box(self.row(kind), []), kind
+            )
+        self.assertFalse(
+            panel.should_open_new_box(self.row("slice"), ["pi"])
+        )
+
+    def test_one_harness_box_still_draws_goal_section(self):
+        _result, _scr, win, _nw = self.run_box([27], installed=["pi"])
+        drawn = " ".join(c.args[2] for c in win.addnstr.call_args_list)
+        self.assertIn("New goal", drawn)
+        self.assertIn("π Pi", drawn)
+        self.assertNotIn("Claude Code", drawn)
+        g, gl, _sl, _loose, _member = self.tree()
+        drawn = " ".join(
+            c.args[2]
+            for c in self.run_box(
+                [27], installed=["pi"], row=("goal", g, gl)
+            )[2].addnstr.call_args_list
+        )
+        self.assertIn("New slice", drawn)
+
+    def test_n_shortcut_skips_the_box(self):
+        for row in (self.row("group"), self.row("goal")):
+            self.assertTrue(panel.should_open_new_box(row, self.BOTH))
+            self.assertFalse(
+                panel.should_open_new_box(
+                    row, self.BOTH, panel.NEW_NO_PICKER_KEY
+                )
+            )
+            self.assertFalse(panel.should_open_new_box(row, self.BOTH, ord("N")))
+
+    def test_goal_item_is_contextual(self):
+        g, gl, sl, loose, member = self.tree()
+        self.assertEqual(panel.new_box_goal_action(("group", g, None)), "goal")
+        self.assertEqual(panel.new_box_goal_action(("goal", g, gl)), "slice")
+        self.assertIsNone(panel.new_box_goal_action(("slice", g, sl)))
+        self.assertEqual(panel.new_box_goal_action(("session", g, loose)), "goal")
+        self.assertEqual(panel.new_box_goal_action(("session", g, member)), "slice")
+        self.assertEqual(
+            panel.new_box_sections(("slice", g, sl)),
+            [panel.NEW_BOX_HARNESSES],
+        )
+        self.assertEqual(
+            panel.new_box_sections(("goal", g, gl)),
+            [panel.NEW_BOX_GOAL, panel.NEW_BOX_HARNESSES],
+        )
 
     def test_preselection_matches_inference(self):
         self.assertEqual(panel.picker_start("claude", self.BOTH), 1)
@@ -912,71 +1493,414 @@ class HarnessPickerTests(unittest.TestCase):
         with mock.patch.object(panel.shutil, "which", return_value="/x"):
             self.assertEqual(panel.installed_harnesses(), list(panel.HARNESS))
 
-    def test_key_handling(self):
+    def test_key_handling_both_sections(self):
         import curses
-        key = panel.picker_key
-        self.assertEqual(key(0, 2, ord("j")), (1, ""))
-        self.assertEqual(key(1, 2, curses.KEY_DOWN), (1, ""))
-        self.assertEqual(key(1, 2, ord("k")), (0, ""))
-        self.assertEqual(key(0, 2, curses.KEY_UP), (0, ""))
-        self.assertEqual(key(1, 2, 10), (1, "pick"))
-        self.assertEqual(key(0, 2, ord("2")), (1, "pick"))
-        self.assertEqual(key(0, 2, ord("3"))[1], "")
-        self.assertEqual(key(0, 2, 27)[1], "cancel")
-        self.assertEqual(key(0, 2, ord("q"))[1], "cancel")
-        self.assertEqual(key(0, 2, ord("x")), (0, ""))
+        state = panel.new_box_start(self.row("group"), self.BOTH)
+        # Focus starts on Harnesses so Enter keeps starting the session.
+        self.assertEqual(
+            state["sections"][state["section"]], panel.NEW_BOX_HARNESSES
+        )
+        state, action = panel.new_box_key(state, self.BOTH, 9)  # Tab
+        self.assertEqual(state["sections"][state["section"]], panel.NEW_BOX_GOAL)
+        state, action = panel.new_box_key(state, self.BOTH, curses.KEY_ENTER)
+        self.assertEqual(action, "goal")
+        state, action = panel.new_box_key(state, self.BOTH, ord("j"))
+        self.assertEqual(
+            (state["sections"][state["section"]], state["harness"], action),
+            (panel.NEW_BOX_HARNESSES, 0, ""),
+        )
+        state, action = panel.new_box_key(state, self.BOTH, ord("j"))
+        self.assertEqual((state["harness"], action), (1, ""))
+        state, action = panel.new_box_key(state, self.BOTH, curses.KEY_DOWN)
+        self.assertEqual(state["harness"], 1)
+        state, action = panel.new_box_key(state, self.BOTH, ord("k"))
+        self.assertEqual(state["harness"], 0)
+        state, action = panel.new_box_key(state, self.BOTH, ord("2"))
+        self.assertEqual((state["harness"], action), (1, "harness"))
+        state, action = panel.new_box_key(state, self.BOTH, 10)
+        self.assertEqual(action, "harness")
+        self.assertEqual(
+            panel.new_box_key(state, self.BOTH, ord("3"))[1], ""
+        )
+        for cancel in (27, ord("q"), 3):
+            self.assertEqual(
+                panel.new_box_key(state, self.BOTH, cancel)[1], "cancel"
+            )
 
-    def run_picker(self, keys, size=(24, 30), index=0):
+    def test_vertical_navigation_crosses_sections(self):
         import curses
+        for up in (curses.KEY_UP, ord("k")):
+            state = panel.new_box_start(self.row("group"), self.BOTH)
+            state, action = panel.new_box_key(state, self.BOTH, up)
+            self.assertEqual(action, "")
+            self.assertEqual(
+                state["sections"][state["section"]], panel.NEW_BOX_GOAL
+            )
+        for down in (curses.KEY_DOWN, ord("j")):
+            state = panel.new_box_start(self.row("group"), self.BOTH)
+            state, action = panel.new_box_key(state, self.BOTH, 9)  # to Goal
+            state, action = panel.new_box_key(state, self.BOTH, down)
+            self.assertEqual(action, "")
+            self.assertEqual(
+                state["sections"][state["section"]], panel.NEW_BOX_HARNESSES
+            )
+            self.assertEqual(state["harness"], 0)  # lands on the first
+        # Inside Harnesses the old up/down clamping still holds.
+        state = panel.new_box_start(self.row("group"), self.BOTH)
+        state, _ = panel.new_box_key(state, self.BOTH, curses.KEY_DOWN)
+        self.assertEqual(
+            (state["sections"][state["section"]], state["harness"]),
+            (panel.NEW_BOX_HARNESSES, 1),
+        )
+        state, _ = panel.new_box_key(state, self.BOTH, curses.KEY_DOWN)
+        self.assertEqual(state["harness"], 1)
+        # A slice box has no Goal item: up from the first harness stays put.
+        state = panel.new_box_start(self.row("slice"), self.BOTH)
+        state, _ = panel.new_box_key(state, self.BOTH, curses.KEY_UP)
+        self.assertEqual(
+            (state["sections"][state["section"]], state["harness"]),
+            (panel.NEW_BOX_HARNESSES, 0),
+        )
+
+    def test_left_and_right_do_nothing_in_the_box(self):
+        import curses
+        for key in (curses.KEY_LEFT, curses.KEY_RIGHT):
+            state = panel.new_box_start(self.row("group"), self.BOTH)
+            state, action = panel.new_box_key(state, self.BOTH, key)
+            self.assertEqual(action, "")
+            self.assertEqual(
+                state["sections"][state["section"]], panel.NEW_BOX_HARNESSES
+            )
+            state, action = panel.new_box_key(state, self.BOTH, 9)  # to Goal
+            state, action = panel.new_box_key(state, self.BOTH, key)
+            self.assertEqual(action, "")
+            self.assertEqual(
+                state["sections"][state["section"]], panel.NEW_BOX_GOAL
+            )
+
+    def test_goal_section_picks_with_enter_or_one(self):
+        import curses
+        state = panel.new_box_start(self.row("group"), self.BOTH)
+        state, _ = panel.new_box_key(state, self.BOTH, 9)  # Tab to Goal
+        self.assertEqual(
+            state["sections"][state["section"]], panel.NEW_BOX_GOAL
+        )
+        self.assertEqual(
+            panel.new_box_key(state, self.BOTH, ord("1"))[1], "goal"
+        )
+        self.assertEqual(
+            panel.new_box_key(state, self.BOTH, 10)[1], "goal"
+        )
+
+    def test_lines_are_one_per_item(self):
+        g, gl, _sl, _loose, _member = self.tree()
+        goal_lines = panel.new_box_lines(
+            panel.new_box_start(("goal", g, gl), self.BOTH), self.BOTH
+        )
+        self.assertEqual(
+            [text for text, _sec, _ in goal_lines],
+            [" + New slice", "", " 1 π Pi", " 2 ✳ Claude Code"],
+        )
+        slice_lines = panel.new_box_lines(
+            panel.new_box_start(("slice", g, _sl), self.BOTH), self.BOTH
+        )
+        self.assertEqual(
+            [text for text, _sec, _ in slice_lines],
+            [" 1 π Pi", " 2 ✳ Claude Code"],
+        )
+
+    def test_goal_item_aligns_with_the_harness_rows(self):
+        g, gl, _sl, _loose, _member = self.tree()
+        lines = panel.new_box_lines(
+            panel.new_box_start(("goal", g, gl), self.BOTH), self.BOTH
+        )
+        goal = next(t for t, sec, _ in lines if sec == panel.NEW_BOX_GOAL)
+        harness = next(t for t, sec, _ in lines if sec == panel.NEW_BOX_HARNESSES)
+        # ASCII `+` plus one space: the marker starts in the harness index
+        # column and the label starts in the glyph column.
+        self.assertEqual(panel.display_width(goal[:goal.index("+")]), 1)
+        self.assertEqual(panel.display_width(goal[:goal.index("New")]), 3)
+        self.assertEqual(
+            panel.display_width(harness[:harness.index("1")]), 1
+        )
+        self.assertEqual(
+            panel.display_width(harness[:harness.index("π")]), 3
+        )
+
+    def drawn(self, row=None, installed=None, size=(24, 30)):
+        """Box content lines actually passed to addnstr, and inner width."""
+        _result, _scr, win, nw = self.run_box(
+            [27], row=row, installed=installed, size=size
+        )
+        calls = win.addnstr.call_args_list[1:]  # call 0 is the title row
+        return [c.args[2] for c in calls], nw.call_args.args[1] - 2
+
+    def test_exact_rendered_lines_with_a_divider_between_sections(self):
+        lines, width = self.drawn()
+        rule = panel.divider_text(width + 2)
+        self.assertEqual(
+            [line.rstrip() for line in lines],
+            [" + New goal", rule, " 1 π Pi", " 2 ✳ Claude Code"],
+        )
+        self.assertTrue(
+            all(panel.display_width(line) == width
+                for line in lines if line != rule)
+        )
+        # One real rule between the two sections, no blank gap line.
+        self.assertEqual(lines.count(rule), 1)
+        self.assertEqual(lines.index(rule), 1)
+        self.assertNotIn(" " * width, lines)
+        self.assertEqual(lines[1][0], "├")
+        self.assertEqual(lines[1][-1], "┤")
+
+    def test_divider_is_not_a_pickable_item_in_the_new_box(self):
+        lines = panel.new_box_lines(
+            panel.new_box_start(self.row("group"), self.BOTH), self.BOTH
+        )
+        self.assertEqual(lines[1], ("", panel.PICKER_DIVIDER, -1))
+        self.assertIs(
+            panel.new_box_mouse_pick(
+                panel.new_box_start(self.row("group"), self.BOTH),
+                1, self.BOTH,
+            ),
+            panel._PICKER_STAY,
+        )
+
+    def test_goal_label_has_no_ellipsis_at_narrow_widths(self):
+        for width in (24, 30, 34, 40):
+            with self.subTest(width=width):
+                lines, _inner = self.drawn(size=(24, width))
+                self.assertIn(" + New goal", [line.rstrip() for line in lines])
+                self.assertNotIn("…", "".join(lines))
+        g, gl, _sl, _loose, _member = self.tree()
+        lines, _inner = self.drawn(row=("goal", g, gl), size=(24, 24))
+        self.assertIn(" + New slice", [line.rstrip() for line in lines])
+        self.assertNotIn("…", "".join(lines))
+
+    def run_box(self, keys, size=(24, 30), row=None, installed=None,
+                hint=None, sections=None):
         scr = mock.Mock()
         scr.getmaxyx.return_value = size
         win = mock.Mock()
         win.getch.side_effect = keys
         with mock.patch.object(panel.curses, "newwin", return_value=win) as nw:
-            result = panel.harness_picker(scr, self.BOTH, index)
+            result = panel.new_box(
+                scr, row or self.row("group"), installed or self.BOTH,
+                hint, sections,
+            )
         return result, scr, win, nw
 
-    def test_picker_move_and_enter(self):
-        result, _, win, _ = self.run_picker([ord("j"), 10])
-        self.assertEqual(result, "claude")
+    def test_box_move_and_enter(self):
+        result, _, win, _ = self.run_box([ord("j"), 10])
+        self.assertEqual(
+            result, {"action": "harness", "harness": "claude"}
+        )
         drawn = " ".join(c.args[2] for c in win.addnstr.call_args_list)
+        self.assertIn("+ New goal", drawn)
         self.assertIn("π Pi", drawn)
         self.assertIn("✳ Claude Code", drawn)
 
-    def test_picker_digit_pick_and_enter_on_preselected(self):
-        self.assertEqual(self.run_picker([ord("2")])[0], "claude")
-        self.assertEqual(self.run_picker([ord("1")], index=1)[0], "pi")
-        self.assertEqual(self.run_picker([10], index=1)[0], "claude")
+    def test_box_digit_pick_and_preselected_enter(self):
+        self.assertEqual(
+            self.run_box([ord("2")])[0]["harness"], "claude"
+        )
+        self.assertEqual(
+            self.run_box([10], hint="claude")[0]["harness"], "claude"
+        )
+        self.assertEqual(
+            self.run_box([ord("1")], hint="claude")[0]["harness"], "pi"
+        )
 
-    def test_picker_cancel(self):
-        self.assertIsNone(self.run_picker([27])[0])
-        self.assertIsNone(self.run_picker([ord("j"), ord("q")])[0])
+    def test_box_cancel(self):
+        for keys in ([27], [ord("j"), ord("q")], [3]):
+            self.assertIsNone(self.run_box(keys)[0])
 
-    def test_picker_survives_resize_and_ticks(self):
+    def test_box_survives_resize_and_ticks(self):
         import curses
-        result, scr, _, nw = self.run_picker([curses.KEY_RESIZE, -1, 10])
-        self.assertEqual(result, "pi")
-        self.assertEqual(nw.call_count, 3)
+        result, scr, _, _nw = self.run_box(
+            [curses.KEY_RESIZE, -1, 10]
+        )
+        # A resize and a refresh tick are redrawn, never treated as answers.
+        self.assertEqual(result, {"action": "harness", "harness": "pi"})
         scr.getch.assert_not_called()  # keys come from the box, not stdscr
 
-    def test_picker_ctrl_c_propagates_and_restores(self):
+    def test_box_keyboard_interrupt_cancels_and_restores(self):
         scr = mock.Mock()
         scr.getmaxyx.return_value = (24, 30)
         win = mock.Mock()
         win.getch.side_effect = KeyboardInterrupt
         with mock.patch.object(panel.curses, "newwin", return_value=win):
-            with self.assertRaises(KeyboardInterrupt):
-                panel.harness_picker(scr, self.BOTH, 0)
+            self.assertIsNone(
+                panel.new_box(scr, self.row("group"), self.BOTH)
+            )
         scr.touchwin.assert_called()
 
-    def test_picker_falls_back_when_it_cannot_draw(self):
+    def test_box_keyboard_interrupt_in_repaint_never_escapes(self):
+        # A Ctrl-C that lands in the finally repaint (after a cancel or a
+        # pick) is contained like one landing in the draw or key handling: no
+        # escape to the main loop, so no detach or spawn, and the box's own
+        # answer is returned unchanged.
+        for keys, expected in (
+            ([27], None),
+            ([ord("2")], {"action": "harness", "harness": "claude"}),
+        ):
+            scr = mock.Mock()
+            scr.getmaxyx.return_value = (24, 30)
+            scr.touchwin.side_effect = KeyboardInterrupt
+            scr.refresh.side_effect = KeyboardInterrupt
+            win = mock.Mock()
+            win.getch.side_effect = keys
+            with mock.patch.object(panel.curses, "newwin", return_value=win), \
+                    mock.patch.object(panel, "detach_panel") as detach, \
+                    mock.patch.object(panel, "new_session") as spawn:
+                self.assertEqual(
+                    panel.new_box(scr, self.row("group"), self.BOTH),
+                    expected,
+                )
+            detach.assert_not_called()
+            spawn.assert_not_called()
+            scr.touchwin.assert_called()
+            scr.refresh.assert_called()  # one interrupt does not skip it
+
+    def test_box_cancels_when_it_cannot_draw(self):
         import curses
         scr = mock.Mock()
         scr.getmaxyx.return_value = (24, 30)
         with mock.patch.object(panel.curses, "newwin", side_effect=curses.error):
-            self.assertEqual(panel.harness_picker(scr, self.BOTH, 1), "claude")
+            result = panel.new_box(
+                scr, self.row("group"), self.BOTH, "claude"
+            )
+        self.assertIsNone(result)
         scr.getch.assert_not_called()
         scr.getmaxyx.return_value = (2, 4)  # too small for any box
         with mock.patch.object(panel.curses, "newwin") as nw:
-            self.assertEqual(panel.harness_picker(scr, self.BOTH, 0), "pi")
+            result = panel.new_box(scr, self.row("group"), self.BOTH)
+        self.assertIsNone(result)
         nw.assert_not_called()
+
+    def run_flow(self, keys, prompt="Phase work", row=None,
+                 container=panel._DERIVE_CONTAINER):
+        scr = mock.Mock()
+        scr.getmaxyx.return_value = (24, 30)
+        win = mock.Mock()
+        win.getch.side_effect = keys
+        with mock.patch.object(panel.curses, "newwin", return_value=win), \
+                mock.patch.object(
+                    panel, "prompt_line", return_value=prompt
+                ) as prompt_line:
+            result = panel.new_box_flow(
+                scr, row or self.row("group"), self.BOTH, container=container
+            )
+        return result, prompt_line
+
+    def test_goal_harness_name_creates_goal_and_targets_it(self):
+        result, prompt_line = self.run_flow([9, 10, 10])
+        harness, container, notices, created = result
+        self.assertEqual(harness, "pi")
+        self.assertTrue(created)
+        self.assertIn("created goal", notices[0])
+        goal_record = panel.load_goals()[0]["/p"][0]
+        self.assertEqual(goal_record.id, container)
+        self.assertEqual(goal_record.name, "Phase work")
+        prompt_line.assert_called_once_with(
+            mock.ANY, "goal name: ", ""
+        )
+
+    def test_refused_empty_name_creates_nothing(self):
+        before = self.file.read_text() if self.file.exists() else None
+        result, _ = self.run_flow([9, 10, 10], prompt="   ")
+        harness, container, notices, created = result
+        self.assertEqual(harness, "")
+        self.assertIsNone(container)
+        self.assertFalse(created)
+        self.assertEqual(notices, ["goal needs a name"])
+        after = self.file.read_text() if self.file.exists() else None
+        self.assertEqual(after, before)
+
+    def test_refused_duplicate_name_creates_nothing(self):
+        panel.create_goal("/p", "Phase work")
+        before = self.file.read_text()
+        result, _ = self.run_flow([9, 10, 10], prompt="phase WORK")
+        harness, container, notices, created = result
+        self.assertEqual(harness, "")
+        self.assertIsNone(container)
+        self.assertFalse(created)
+        self.assertIn("already exists", notices[0])
+        self.assertEqual(self.file.read_text(), before)
+
+    def test_goal_row_goal_creates_a_slice(self):
+        gl = panel.create_goal("/p", "G")
+        g = panel.Group("/p", [session("member", "/p", 2.0)])
+        g.goals = [gl]
+        result, _ = self.run_flow(
+            [9, 10, ord("j"), 10], prompt="Slice one",
+            row=("goal", g, gl),
+        )
+        harness, container, notices, created = result
+        self.assertEqual(harness, "claude")
+        self.assertTrue(created)
+        self.assertIn("created slice", notices[0])
+        record = next(
+            x for x in panel.load_goals()[0]["/p"] if x.id == container
+        )
+        self.assertEqual((record.name, record.parent), ("Slice one", gl.id))
+
+    def test_cancel_at_each_of_the_three_steps(self):
+        before = self.file.read_text() if self.file.exists() else None
+        # Box itself.
+        self.assertIsNone(self.run_flow([27])[0])
+        # Harness step after choosing the Goal item.
+        self.assertIsNone(self.run_flow([9, 10, 27])[0])
+        # Name prompt after choosing the harness.
+        self.assertIsNone(self.run_flow([9, 10, 10], prompt=None)[0])
+        after = self.file.read_text() if self.file.exists() else None
+        self.assertEqual(after, before)
+
+    def test_corrupt_store_starts_loose_with_a_warning(self):
+        self.file.parent.mkdir(parents=True, exist_ok=True)
+        self.file.write_text("{ nope")
+        panel._goals_cache = None
+        result, _ = self.run_flow([9, 10, 10])
+        harness, container, notices, created = result
+        self.assertEqual(harness, "pi")
+        self.assertIsNone(container)
+        self.assertFalse(created)
+        self.assertIn("unreadable", notices[0])
+        self.assertIn("started loose", notices[0])
+        self.assertEqual(self.file.read_text(), "{ nope")
+
+    def test_unwritable_store_starts_loose_with_a_warning(self):
+        before = self.file.read_text() if self.file.exists() else None
+        with mock.patch.object(
+            panel.os, "replace",
+            side_effect=OSError(errno.ENOSPC, "No space left on device"),
+        ):
+            result, _ = self.run_flow([9, 10, 10])
+        harness, container, notices, created = result
+        self.assertEqual(harness, "pi")
+        self.assertIsNone(container)
+        self.assertFalse(created)
+        self.assertIn("could not save goal", notices[0])
+        self.assertIn("started loose", notices[0])
+        after = self.file.read_text() if self.file.exists() else None
+        self.assertEqual(after, before)
+
+    def test_harness_item_keeps_the_row_target(self):
+        g, gl, _sl, _loose, _member = self.tree()
+        result, _ = self.run_flow([10], row=("goal", g, gl))
+        self.assertEqual(result, ("pi", gl.id, [], False))
+
+    def test_explicit_none_container_stays_loose_on_a_goal_row(self):
+        # The sentinel derives the row's goal id; an explicit None is the
+        # caller's "loose" target and must not be treated as a missing one.
+        g, gl, _sl, _loose, _member = self.tree()
+        loose, _ = self.run_flow(
+            [10], row=("goal", g, gl), container=None
+        )
+        self.assertEqual(loose, ("pi", None, [], False))
+        derived, _ = self.run_flow([10], row=("goal", g, gl))
+        self.assertEqual(derived, ("pi", gl.id, [], False))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

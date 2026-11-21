@@ -137,7 +137,7 @@ class SidebarLayoutTests(unittest.TestCase):
         ]
         sessions.sort(key=lambda s: s.last_ts, reverse=True)
         for i in live:
-            sessions[i].status = "running"
+            sessions[i].status = "in_progress"
         return panel.Group(cwd, sessions)
 
     def test_group_limits_sessions_and_offers_more(self):
@@ -147,16 +147,16 @@ class SidebarLayoutTests(unittest.TestCase):
             [item[0] for item in items],
             ["group"] + ["session"] * panel.SESSION_LIMIT + ["more"],
         )
-        self.assertEqual(items[-1][2], 7 - panel.SESSION_LIMIT)  # hidden count
+        self.assertEqual(items[-1][2], (7 - panel.SESSION_LIMIT, False))
 
-    def test_more_row_reveals_everything_and_collapses_again(self):
+    def test_revealed_tier_keeps_the_more_row_as_show_fewer(self):
         g = self.group("/proj", 7)
-        items = list(panel.rows_for([g], "", set(), {"/proj"}))
+        items = list(panel.rows_for([g], "", set(), {"/proj": 1}))
         self.assertEqual(
             [item[0] for item in items], ["group"] + ["session"] * 7 + ["more"]
         )
         lines, _, _ = panel.build_lines(
-            items, 40, set(), "", {"/proj"}, {"/proj": "proj"}
+            items, 40, set(), "", {"/proj": "proj"}
         )
         self.assertEqual(lines[-1][0].strip(), "… show fewer")
 
@@ -166,7 +166,7 @@ class SidebarLayoutTests(unittest.TestCase):
         shown = [item[2] for item in items if item[0] == "session"]
         self.assertIn(g.sessions[6], shown)
         self.assertEqual(len(shown), panel.SESSION_LIMIT + 1)
-        self.assertEqual(items[-1][2], 7 - len(shown))
+        self.assertEqual(items[-1][2], (7 - len(shown), False))
 
     def test_filter_shows_every_match(self):
         # Half the titles match the filter; the limit must not hide them.
@@ -199,7 +199,7 @@ class SidebarLayoutTests(unittest.TestCase):
         two = self.group("/two", 1)
         items = list(panel.rows_for([one, two], "", set(), set()))
         lines, starts, heights = panel.build_lines(
-            items, 40, set(), "", set(), {}
+            items, 40, set(), "", {}
         )
         preview = [(line[0], line[1]) for line in lines]
         self.assertEqual([
@@ -213,7 +213,7 @@ class SidebarLayoutTests(unittest.TestCase):
 
     def test_single_group_has_no_gap(self):
         items = list(panel.rows_for([self.group("/one", 2)], "", set(), set()))
-        lines, _, _ = panel.build_lines(items, 40, set(), "", set(), {})
+        lines, _, _ = panel.build_lines(items, 40, set(), "", {})
         self.assertTrue(all(kind != "gap" for _, kind, _ in lines))
 
     def test_session_rows_show_the_harness_glyph(self):
@@ -223,7 +223,7 @@ class SidebarLayoutTests(unittest.TestCase):
         group = panel.Group("/proj", [pi, claude])
         items = list(panel.rows_for([group], "", set()))
         lines, _, _ = panel.build_lines(
-            items, 40, set(), "", set(), {"/proj": "proj"}
+            items, 40, set(), "", {"/proj": "proj"}
         )
         texts = [text for text, kind, _ in lines if kind == "session"]
         self.assertTrue(any("π" in text for text in texts))

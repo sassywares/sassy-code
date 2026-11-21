@@ -336,7 +336,7 @@ if __name__ == "__main__":
 
 
 class CacheTests(unittest.TestCase):
-    def test_unchanged_file_still_ages_from_active_to_idle(self):
+    def test_unchanged_file_keeps_its_file_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = datetime(
                 2026, 10, 23, 4, 26, 42, tzinfo=timezone.utc
@@ -362,5 +362,7 @@ class CacheTests(unittest.TestCase):
                 first = panel.read_session(str(path), "pi")
             with mock.patch.object(panel.time, "time", return_value=base + 1000):
                 second = panel.read_session(str(path), "pi")
-            self.assertEqual(first.status, "active")
+            # Without a live process a terminal turn is idle at any age; the
+            # cache must not invent an "active" window from the clock.
+            self.assertEqual(first.status, "idle")
             self.assertEqual(second.status, "idle")

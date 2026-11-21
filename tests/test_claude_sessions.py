@@ -166,7 +166,7 @@ class LocalCommandTests(ClaudeTestCase):
         ])
         self.assertTrue(s.is_complete())
         self.assertEqual(s.last_role, "assistant")
-        self.assertNotEqual(s.status, "active")
+        self.assertEqual(s.status, "idle")
 
 
 class CwdTests(ClaudeTestCase):
@@ -189,6 +189,49 @@ class BackgroundTaskTests(ClaudeTestCase):
         self.assertEqual(s.open_tasks, {"aaa111", "bbb222"})
         self.assertFalse(s.is_complete())
         self.assertEqual(s.status, "idle")  # not running: tasks alone are not active
+
+    def test_open_background_run_does_not_pin_a_finished_turn(self):
+        # A live background Agent outliving an `end_turn` turn leaves the user
+        # free to type: status must follow the turn, not the open run.
+        s = self.parse([
+            user(1, "run scouts"), *launched(2, "aaa111"), assistant(3),
+        ])
+        self.assertEqual(s.open_tasks, {"aaa111"})
+        self.assertEqual(s.last_role, "assistant")
+        self.assertEqual(s.last_stop_reason, "end_turn")
+        self.assertFalse(panel.pending_turn(s))
+        self.assertEqual(
+            panel.session_status(s, True, False, False), "needs_input"
+        )
+        self.assertFalse(s.is_complete())  # still never reaped from file state
+
+    def test_open_background_run_with_a_trailing_tool_result_is_in_progress(self):
+        s = self.parse([
+            user(1, "run scouts"), *launched(2, "aaa111"), assistant(3),
+            tool_result(4, "interim output"),
+        ])
+        self.assertEqual(s.open_tasks, {"aaa111"})
+        self.assertEqual(s.last_role, "toolResult")
+        self.assertEqual(
+            panel.session_status(s, True, False, False), "in_progress"
+        )
+
+    def test_queued_user_message_and_plain_mid_turn_tail_are_in_progress(self):
+        queued = {"type": "queue-operation", "operation": "enqueue",
+                  "content": "also check this"}
+        s = self.parse([
+            user(1, "run scouts"), *launched(2, "aaa111"), assistant(3),
+            queued, user(5, "also check this"),
+        ])
+        self.assertTrue(s.queued_input)
+        self.assertEqual(s.last_role, "user")
+        self.assertEqual(
+            panel.session_status(s, True, False, False), "in_progress"
+        )
+        s = self.parse([user(1, "go"), assistant(2), user(3, "and this")])
+        self.assertEqual(
+            panel.session_status(s, True, False, False), "in_progress"
+        )
 
     def test_one_notification_with_several_ids_closes_them(self):
         s = self.parse([
@@ -275,6 +318,47 @@ class BackgroundTaskTests(ClaudeTestCase):
         self.assertEqual(s.open_tasks, {"aaa111"})
         self.assertFalse(s.is_complete())  # never reaped from file state
         self.assertEqual(panel._infer_status(s), "idle")  # years old, not running
+
+    def test_stopped_and_resumed_runs_close_and_the_session_goes_idle(self):
+        # Reproduces a finished session pinned in progress by two leaked runs:
+        # one stopped with TaskStop, one resumed with SendMessage whose final
+        # notification carries the resume run's own tool-use id.
+        interim = INTERIM_NOTE.format(aid="abc123", tuid="toolu_agent")
+        s = self.parse([
+            user(1, "run scouts"), *launched(2, "stopped1"),
+            *launched(3, "abc123"), assistant(4), user(5, interim),
+            *resumed(6, "abc123"),
+            user(7, RUN_NOTE.format(aid="abc123", tuid="toolu_resume")),
+            tool_use(8, "TaskStop", "toolu_stop", task_id="stopped1"),
+            result_for(8, "toolu_stop",
+                       "Successfully stopped task: stopped1"),
+            assistant(9),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+        self.assertTrue(s.is_complete())
+        self.assertEqual(s.status, "idle")
+
+    def test_task_stop_error_naming_the_run_closes_it(self):
+        # The run's only closing evidence is a TaskStop result saying the task
+        # is gone (dd0bc4b7-0ec6-4289-85dc-4c27c69b6949). Interim notifications
+        # close nothing, so without this the run stays open and a live pane
+        # reads in progress forever.
+        s = self.parse([
+            user(1, "run scouts"), *launched(2, "adff31676b0df4dd2"),
+            assistant(3),
+            user(4, INTERIM_NOTE.format(aid="adff31676b0df4dd2",
+                                        tuid="toolu_agent")),
+            tool_use(5, "TaskStop", "toolu_stop", task_id="adff31676b0df4dd2"),
+            result_for(5, "toolu_stop",
+                       "<tool_use_error>No task found with ID: "
+                       "adff31676b0df4dd2. Background agents running or "
+                       "waiting: a4338af58ada1daf3 (P1 e2e runner)"
+                       "</tool_use_error>"),
+            assistant(6),
+        ])
+        self.assertEqual(s.open_tasks, frozenset())
+        self.assertTrue(s.is_complete())
+        self.assertEqual(s.status, "idle")
 
 
 RESUME = (
@@ -565,7 +649,7 @@ class WidthTests(unittest.TestCase):
         )
         g = panel.Group(cwd="/p", sessions=[s])
         items = list(panel.rows_for([g], "", set(), None))
-        lines, _, _ = panel.build_lines(items, 30, set(), "", None, {"/p": "p"})
+        lines, _, _ = panel.build_lines(items, 30, set(), "", {"/p": "p"})
         for text, kind, _ in lines:
             if kind == "session":
                 self.assertLessEqual(panel.display_width(text), 29)

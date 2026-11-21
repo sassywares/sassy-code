@@ -31,6 +31,7 @@ class BackgroundLifecycleTests(unittest.TestCase):
 
     def setUp(self):
         BackgroundLifecycleTests.counter += 1
+        panel._ATTENTION.clear()
         self.tmp = Path(tempfile.mkdtemp(prefix="sassy-code-test-"))
         self.sessions = self.tmp / "sessions"
         (self.sessions / "project").mkdir(parents=True)
@@ -436,8 +437,8 @@ class BackgroundLifecycleTests(unittest.TestCase):
             parent=self.sessions / "project" / "old.jsonl",
         )
         sessions = panel.session_index(panel.load_groups())
-        self.assertEqual(sessions["new"].status, "running")
-        self.assertNotEqual(sessions["old"].status, "running")
+        self.assertEqual(sessions["new"].status, "in_progress")
+        self.assertNotEqual(sessions["old"].status, "in_progress")
 
         # The successor is already in the viewer: Enter must focus it, not
         # start a second Pi for the same session.
@@ -448,8 +449,8 @@ class BackgroundLifecycleTests(unittest.TestCase):
         self.assertEqual(self.pi_pid_in(old_pane), old_pid)
 
         sessions = panel.session_index(panel.load_groups())
-        self.assertEqual(sessions["new"].status, "running")
-        self.assertNotEqual(sessions["old"].status, "running")
+        self.assertEqual(sessions["new"].status, "in_progress")
+        self.assertNotEqual(sessions["old"].status, "in_progress")
         # The highlight tracks the retagged viewer pane, not the replaced row.
         _, panes, viewer = panel.visible_layout(
             panel.load_groups(), self.original_viewer
@@ -482,9 +483,9 @@ class BackgroundLifecycleTests(unittest.TestCase):
         )
         groups = panel.load_groups()
         sessions = panel.session_index(groups)
-        self.assertEqual(sessions["second"].status, "running")
-        self.assertNotEqual(sessions["first"].status, "running")
-        self.assertNotEqual(sessions["root"].status, "running")
+        self.assertEqual(sessions["second"].status, "in_progress")
+        self.assertNotEqual(sessions["first"].status, "in_progress")
+        self.assertNotEqual(sessions["root"].status, "in_progress")
 
         _, panes, viewer = panel.visible_layout(groups, self.original_viewer)
         self.assertEqual(panel.pane_map(panes)["second"], pane_id)
@@ -527,8 +528,10 @@ class BackgroundLifecycleTests(unittest.TestCase):
         self.assertEqual(tags["new"], child_pane)
         self.assertNotEqual(tags.get("old"), child_pane)
         sessions = panel.session_index(panel.load_groups())
-        self.assertEqual(sessions["old"].status, "running")
-        self.assertEqual(sessions["new"].status, "running")
+        # `old` was terminal when it was replaced, so its fresh process waits
+        # for input; the successor is still mid-tool-use.
+        self.assertEqual(sessions["old"].status, "needs_input")
+        self.assertEqual(sessions["new"].status, "in_progress")
 
     def test_new_session_preserves_previous_working_session(self):
         self.write_session("old", "toolUse")
@@ -561,7 +564,7 @@ class BackgroundLifecycleTests(unittest.TestCase):
         self.assertIsNone(self.present(sid))
         pane_id = panel.pane_map(self.panes())[sid]
         _, running = self.group_session(sid)
-        self.assertEqual(running.status, "running")
+        self.assertEqual(running.status, "in_progress")
         pid = self.agent_pid_in(pane_id, "claude")
         self.assertIsNotNone(pid)
         command = next(
@@ -729,7 +732,79 @@ class BackgroundLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(kinds[at + 3], ("session", "seed"))
 
-    def test_harness_picker_on_project_heading_and_n_shortcut_skips_it(self):
+    def test_n_goal_harness_name_flow_creates_and_files_the_goal(self):
+        # Proves the full `n` box journey against a live panel: Tab leaves the
+        # Harnesses section for Goal, Enter opens the harness list, Enter keeps
+        # the preselected Pi, and the name prompt creates the goal before the
+        # session spawns. It does not prove the slice variant (covered by the
+        # unit tests) or mouse interaction (P6).
+        self.panel_state = self.tmp / ".sassywares" / "sassy-code"
+        patcher = mock.patch.object(panel, "STATE_DIR", str(self.panel_state))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        panel._goals_cache = None
+        self.addCleanup(setattr, panel, "_goals_cache", None)
+        self.write_session("seed", "stop", offset=-60)
+        win = self.tmux(
+            "new-window", "-d", "-P", "-F", "#{window_id}",
+            "-n", "box", "sleep", "60",
+        ).strip()
+        viewer = self.tmux(
+            "list-panes", "-t", win, "-F", "#{pane_id}"
+        ).splitlines()[0]
+        panel_pane = self.tmux(
+            "split-window", "-h", "-b", "-t", win,
+            "-P", "-F", "#{pane_id}",
+            "env", f"HOME={self.tmp}",
+            f"PI_CODING_AGENT_SESSION_DIR={self.sessions}",
+            f"SASSY_CODE_CLAUDE_SESSION_DIR={self.claude_sessions}",
+            "SASSY_CODE_NEW_HARNESS=pi",
+            sys.executable, str(ROOT / "panel.py"), "--target", viewer,
+        ).strip()
+        os.environ["TMUX_PANE"] = panel_pane
+
+        def screen():
+            return self.tmux("capture-pane", "-p", "-t", panel_pane)
+
+        def keys(*args: str):
+            self.tmux("send-keys", "-t", panel_pane, *args)
+
+        self.assertTrue(
+            self.wait_until(lambda: "seed" in screen()), screen()
+        )
+        keys("-l", "n")
+        self.assertTrue(
+            self.wait_until(lambda: "New goal" in screen()), screen()
+        )
+        keys("Tab")  # Harnesses -> Goal
+        keys("Enter")  # New goal; the second box lists only harnesses
+        keys("Enter")  # keep the preselected Pi
+        self.assertTrue(
+            self.wait_until(lambda: "goal name:" in screen()), screen()
+        )
+        self.assertNotIn("Claude Code", screen())
+        keys("-l", "Box goal")
+        keys("Enter")
+        goals_file = self.panel_state / "goals.json"
+        self.assertTrue(
+            self.wait_until(lambda: goals_file.exists()), screen()
+        )
+        ids = self.wait_until(self.goal_session_ids)
+        self.assertEqual(len(ids), 1)
+        record = json.loads(goals_file.read_text())[
+            "projects"][str(self.tmp)][0]
+        self.assertEqual(record["name"], "Box goal")
+        self.assertEqual(record["sessions"], ids)
+
+        def agent():
+            known = set(ids)
+            for proc in self.panes():
+                if proc.tag in known and self.agent_pid_in(proc.id, "pi"):
+                    return proc
+
+        self.assertIsNotNone(self.wait_until(agent), screen())
+
+    def test_new_box_on_project_heading_and_n_shortcut_skips_it(self):
         self.panel_state = self.tmp / ".sassywares" / "sassy-code"
         self.write_session("seed", "stop", offset=-60)
         win = self.tmux(
@@ -918,7 +993,7 @@ class BackgroundLifecycleTests(unittest.TestCase):
         self.assertIn(proc.pid, running[sid])
 
         groups, s = self.group_session(sid)
-        self.assertEqual(s.status, "running")
+        self.assertEqual(s.status, "in_progress")
         before = self.visible_viewer()
         warning = panel.present_session(s, groups, self.original_viewer, {})
         self.assertIsNotNone(warning)
@@ -1070,7 +1145,6 @@ class BackgroundLifecycleTests(unittest.TestCase):
             "q": [("-l", "q")],
             "ctrl-c": [("C-c",)],
             "D confirm then ctrl-c": [("Down",), ("-l", "D"), ("C-c",)],
-            "picker then ctrl-c": [("-l", "n"), ("C-c",)],
         }
         for name, steps in cases.items():
             with self.subTest(name):
@@ -1127,6 +1201,30 @@ class BackgroundLifecycleTests(unittest.TestCase):
                     self.wait_until(lambda: self.client_count() == 0),
                     f"{name}: the panel stopped answering after the first detach",
                 )
+
+    def test_ctrl_c_in_the_new_box_cancels_and_keeps_running(self):
+        _viewer, panel_pane = self.dedicated_panel()
+        panel_pid = self.pane_pid(panel_pane)
+        client = self.attach_client()
+        self.tmux("send-keys", "-t", panel_pane, "-l", "n")
+        self.assertTrue(self.wait_until(
+            lambda: "Claude Code" in self.tmux(
+                "capture-pane", "-p", "-t", panel_pane)
+        ))
+        # Real terminal: ISIG turns Ctrl-C into KeyboardInterrupt, so the box
+        # must cancel it instead of the panel detaching the client.
+        self.tmux("send-keys", "-t", panel_pane, "C-c")
+        self.assertTrue(self.wait_until(
+            lambda: "Claude Code" not in self.tmux(
+                "capture-pane", "-p", "-t", panel_pane)
+        ))
+        self.assertEqual(self.client_count(), 1)
+        self.assertIsNone(client.poll())
+        self.assertEqual(self.pane_pid(panel_pane), panel_pid)
+        self.assertNotIn(panel.BG_SESSION, self.session_names())  # nothing spawned
+        # The panel still answers: q detaches as usual.
+        self.tmux("send-keys", "-t", panel_pane, "-l", "q")
+        self.assertTrue(self.wait_until(lambda: self.client_count() == 0))
 
     def test_rerunning_main_after_detach_adds_no_second_panel(self):
         _, panel_pane = self.dedicated_panel()

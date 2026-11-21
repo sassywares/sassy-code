@@ -21,7 +21,9 @@ session is shown. *Avoid: parked session, suspended session.*
 
 **Managed pane** — a viewer or background pane that sassy-code controls. Managed
 panes carry the `@sassy_session=<id>` pane option, which travels with the pane
-and is the authoritative session identity after swaps and restarts.
+and is the authoritative session identity after swaps and restarts. The tag is
+identity, not **liveness**: a pane whose agent has exited is a leftover shell
+still carrying the tag, and is not live. *Avoid: tagged pane, agent pane.*
 
 **Panel tag** — the `@sassy_panel=1` pane option the control panel puts on its
 own pane, so a launcher shortcut can find the panel of the current window
@@ -71,7 +73,8 @@ turn. *Avoid: restart, respawn.*
 **Pending turn** — a session whose latest turn is unresolved: the last message
 is from the user or a tool, the assistant is at `stopReason=toolUse` /
 `stop_reason=tool_use`, or no terminal assistant stop reason has been recorded
-yet.
+yet. Background work the harness is still running does not make a turn pending;
+it keeps the pane from being **reaped**, not the row in progress.
 
 **Completion** — the latest assistant message ending with a terminal stop
 reason: `stop`, `error`, or `aborted` for Pi; `end_turn`, `stop_sequence`,
@@ -96,9 +99,15 @@ a handoff can record the session the Pi process was *started* with as
 than a parent/child chain; the panel follows the newest unclaimed session in
 that shared **handoff lineage**.
 
-**Status inference** — deriving a session's state from its last recorded message
-and from live processes, rather than from a state Pi pushes.
-*Avoid: health, state.*
+**Status inference** — deriving a session's five-state status from its transcript,
+live processes and in-memory attention, rather than from a state a harness
+pushes. `in progress` means a live process with an unresolved turn; `needs
+input` means a live process whose turn is terminal (or has not started), a
+pending Claude `AskUserQuestion`, or an attention mark on a hidden session that
+finished; `idle` means no live process and no attention; `error` means the last
+entry failed; `done` is a user mark. Precedence is
+`error > done > in progress > needs input > idle`. A live session is never
+idle. *Avoid: health, state, active, running.*
 
 **Collapse** — hiding a project group's sessions while keeping its heading
 visible; the inverse is **expand**. *Avoid: fold/unfold, close/open.*
@@ -108,38 +117,109 @@ for home, otherwise the folder's own name (`tap2-workspace`), grown with parent
 folders only when two projects share a name (`a/app`, `b/app`). The full cwd
 still keys grouping and collapse state. *Avoid: path, shortened path.*
 
-**Session limit** — the cap on top-level items drawn under one project
-(`SESSION_LIMIT`, currently 5; a goal counts as one item) before a `… N more`
-row, whose N counts hidden items. Expanding reveals the rest and relabels that
-row `… show fewer`; a **running** session (or a goal holding one) is never
-hidden behind the limit. *Avoid: pagination, truncation.*
+**Session limit** — the base cap on top-level items drawn under one project
+(`SESSION_LIMIT`, currently 5; a goal counts as one item even with slices and
+sessions inside it) before a `… N more` row, whose N counts hidden items.
+Revealing doubles the increment each tier (+10, +20, +40), lifting the cap 5,
+15, 35, 75…; `]` expands a collapsed container at the base tier and then reveals
+one tier per press, while `[` hides one tier and then collapses at the base
+tier. Activating `… N more` reveals the next tier; the row becomes
+`… show fewer` once everything is shown, staying visible so activating it (or
+`[`) can shrink the list one tier. An **in progress** session (or a goal or
+slice holding one) is never hidden behind the limit, even when it sits beyond
+the current tier. *Avoid: pagination, truncation.*
 
-**Goal limit** — the second cap, on sessions drawn under one expanded goal
-(`GOAL_SESSION_LIMIT`, currently 3) before the goal's own `… N more` row, whose
-N counts hidden sessions (not items). It expands and collapses independently of
-the project's row, and a running session is never hidden behind it either.
+**Goal limit** — the second and third base caps, on children drawn under an
+expanded **goal** and sessions drawn under an expanded **slice** (both 3, from
+`GOAL_SESSION_LIMIT` and `SLICE_SESSION_LIMIT`) before that container's own
+`… N more` row. A goal's children are its direct sessions and its slices counted
+together; a slice's are its sessions. Each tiers the same way independently of
+the project's row (3, 9, 21…), one level per `[`/`]` press: `]` expands then
+reveals, `[` hides then collapses. Activating its `… show fewer` row hides one
+tier. An in-progress session is never hidden behind either limit.
 
-**Goal** — a user-created, named folder inside one project that groups the
-sessions of one feature. One level deep (project → goal → sessions), expands
-and collapses like a project, and persists in `goals.json` under the state
-directory. Panel state only: Pi and Claude Code never know about goals. An empty
-goal shows a dim hint line that is not a cursor stop. *Avoid: folder, epic,
-workspace.*
+**Goal** — a user-created, named container inside one project that groups the
+sessions of one feature. Two levels: project → goal → **slice** → sessions.
+A goal's count, age and sort position cover its whole subtree; its rollup mark
+is the worst descendant state (`✗` > `●` > `◐`) when collapsed, with `✓` when
+the goal itself is done. Goals expand and collapse like a project and persist in
+`goals.json` under the state directory, with an optional `parent` (missing or
+unknown means top-level). Panel state only: Pi and Claude Code never know about
+goals. An empty goal shows a dim hint line that is not a cursor stop. *Avoid:
+folder, epic, workspace.*
 
-**Done goal** — a goal marked finished with `x`: it shows `✓` after its arrow,
-is collapsed, and sorts below the project's active goals and loose sessions
-(still one item toward the **session limit**). `x` again reopens it in recency
-order and expands it; starting a session in it with `n` also reopens and
-expands it. Deleting a goal (`D`, confirmed) is separate: its sessions become
-loose. *Avoid: archived, closed.*
+**Slice** — a named child of a **goal**, one more level (project → goal →
+slice → sessions). It holds sessions directly, has its own three-session limit,
+collapse state and done mark, and cannot contain another slice. Names are unique
+among siblings under the same parent only, so two goals may each have a
+`Phase 2`. Deleting a slice flattens its sessions loose; deleting its goal
+removes the slice too and flattens every session in the subtree. An empty slice
+gets the same dim hint as an empty goal. *Avoid: subgoal, phase, step, child
+goal.*
 
-**Harness picker** — the small boxed list `n` opens on a project heading or
-goal row when more than one harness is installed: one line per installed harness
-(glyph + label), preselected on the inferred harness; `j`/`k`/arrows move,
-`1`–`9`/`Enter` pick, `Esc`/`q` cancel. Session rows and the `N` prefix shortcut
-skip it and use the inferred harness. *Avoid: harness menu, dialog.*
+**Done goal / done slice** — a goal or slice marked finished with `x`: it shows
+`✓` after its count, is collapsed, and sorts below its active siblings (a goal
+still counts as one item toward the **session limit**). `x` again reopens it in
+recency order and expands it; starting a session in it with `n` also reopens and
+expands it. Deleting it (`D`, confirmed) is separate. *Avoid: archived, closed.*
+
+**Done session** — a session marked finished with `x`, stored by session id in
+`sessions.json` under the state directory (not in the transcript). It shows
+`✓`, dims the whole row, and joins done goals and slices in one sunk band ordered
+by recency. New activity or `x` again revives it. A corrupt or wrong-shape
+`sessions.json` hides the marks, warns in the footer, refuses edits, and is
+never overwritten. *Avoid: archived, hidden, deleted.*
+
+**Attention** — an in-memory, per-session mark that a hidden session finished
+its turn and is waiting for the user. It keeps the row on `needs input` after
+the pane is reaped, is cleared when the session is presented or starts a new
+turn, and is lost on restart; it never keeps a process alive. *Avoid:
+notification, unread.*
+
+**New-session box** — the boxed picker `n` opens, with no section headings. It
+holds the contextual `+ New goal` or `+ New slice` item (nothing on a slice
+row), then one line per installed harness (glyph + label), preselected on the
+inferred harness. A divider rule separates the contextual item from the
+harnesses; the ASCII `+` plus one space sits in the harness index column and
+the label in the glyph column. `j/k`/`↑`/`↓` move across both parts (`↑` from
+the first harness returns to the contextual item, `↓` from it lands on the
+first harness), `Tab` switches between them, `←`/`→` do nothing, `1`–`9`/`Enter`
+pick, and `Esc`/`q`/`Ctrl-C` cancel. A harness item starts at once; the
+contextual item runs harness → name → create → start. Project and goal rows
+always show the box, slice rows only with more than one harness; session rows
+and the `N` prefix shortcut skip it and use the inferred harness. *Avoid:
+harness menu, dialog, new-session dialog.*
+
+**Move** — re-filing a session with `m` into a goal or slice, or back to
+**loose** (`⌂ Top level`). The picker lists `⌂ Top level` first (no goal, i.e.
+loose), `+ New goal` second (creates a top-level goal and moves the session
+into it), then a divider rule, then every goal and slice as a tree (`├`/`└`
+connectors under the parent goal); the marker column holds `⌂` on the loose
+row and a `✓` on the container the session is in now (never done), with the
+words in the name column; done goals and slices are dimmed. A move
+stays inside one project; only sessions move, not goals or slices. Moving into a done goal or
+slice reopens and expands it, and the session keeps running. Explicit loose
+membership is stored per project in `goals.json` and wins over inherited
+membership: a Pi successor of a moved-out session stays loose rather than
+rejoining its ancestor's goal. *Avoid: reassign, transfer.*
+
+**Mouse** — the pointer path through the panel: a **click** selects a row; a
+**double-click** (a second click on the same session row within about 0.4
+seconds) **presents** it; a click on a project heading, **goal**, or **slice**
+toggles it; a click on a `more` row steps one tier; the **wheel** moves the
+highlight one row per notch, with duplicate events from one notch debounced; a
+click on a hint or gap line does nothing. Wheel-up works on every curses
+build; wheel-down needs a build with 5-button (`BUTTON5_*`) support and is
+inert on the macOS system ncurses, which has only four buttons. No modifier
+bit is ever read as a wheel notch.
+A **drag-to-move** presses on a session, shows `moving <title>…` in the footer
+while held, and releasing on a goal or slice in the same project **moves** the
+session there, on that project's heading makes it **loose**, and anywhere else
+cancels. The **new-session box** and **Move** box accept a click to pick and a
+click outside to cancel. Hold `Shift` to let the terminal select text instead.
+*Avoid: tap, scroll, drop.*
 
 **Command line** — the `:` prompt at the bottom of the panel. The first token is
-the command (`goal:create`, `goal:rename`) and the rest is its argument, so a goal name may
-contain `:`. Unlike `/`, which only filters, it changes state; refusals appear
+the command (`goal:create`, `goal:rename`, `slice:create`, `slice:rename`) and
+the rest is its argument, so a name may contain `:`. Unlike `/`, which only filters, it changes state; refusals appear
 as a footer message. *Avoid: palette, ex mode.*

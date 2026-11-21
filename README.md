@@ -13,15 +13,29 @@ Session titles are truncated to a single line with an ellipsis; the age is
 right-aligned. Projects are grouped by working directory and labelled with the
 folder's own name — `root` for home, `tap2-workspace` instead of the whole path
 — with a blank line between projects. A project shows its five most recent
-items (a goal counts as one), then `… N more`; that row toggles to `… show
-fewer` once expanded. An expanded goal shows its three most recent sessions,
-then its own `… N more` counting sessions. A live (running) session is never
-hidden behind either limit, and a collapsed goal shows ● when it holds one.
+items (a goal counts as one), then `… N more`; revealing doubles the increment
+each tier (+10, +20, +40), so the cap climbs 5, 15, 35, 75, then all. `]`
+reveals one level: it expands a collapsed project, goal or slice at the base
+tier, then reveals the next tier. `[` goes back one level the same way: it hides
+one tier, then collapses the container once it is back at the base tier.
+Activating a `… N more` row reveals the next tier, and activating
+`… show fewer` hides one. A reveal skips any tier its cap leaves unchanged, so
+it always lands on rows that appear. The row shows the remaining count, and
+becomes `… show fewer` once everything is shown. It exists at the base tier
+only while something is hidden; once you step past the base tier it stays in
+place, so the list can be shrunk again. Expanding a collapsed container always
+returns to the base tier. An expanded goal tiers the same way from its three
+most recent children — direct sessions and slices counted together — and an
+expanded slice tiers its three most recent sessions. A live in-progress session
+is never hidden behind any of the limits, even when it sits beyond the current
+tier, and a collapsed goal or slice shows its rollup mark when a descendant
+holds one.
 
 ## Table of contents
 
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Mouse](#mouse)
 - [Optional: add an alias](#optional-add-an-alias)
 - [How it works](#how-it-works)
   - [Background lifecycle](#background-lifecycle)
@@ -68,41 +82,97 @@ If the file is not executable, either `chmod +x main` or run it as `bash main`.
 - `SASSY_CODE_NEW_HARNESS=claude ./main` makes `n` start Claude Code when the
   highlighted project has no session to infer a harness from. Without the
   override, the panel picks whichever harness is installed.
+- `SASSY_CODE_MOUSE_DEBUG=/tmp/sassywares/scratch/mouse.log ./main` appends one
+  line per mouse event (`bstate` in hex, x, y, and how the panel classified it)
+  to that file, for pinning an unknown wheel bit. Unset, it writes nothing.
 - `PI_CODING_AGENT_SESSION_DIR` points the panel at a non-default Pi session
   store. For Claude Code, `SASSY_CODE_CLAUDE_SESSION_DIR` is the `projects`
   directory itself; `CLAUDE_CONFIG_DIR` is the config directory, and the panel
   appends `projects` to it.
 
-Keys in the left pane: `↑/↓` or `j/k` move, `g/G` jump, `Enter` presents a
-session (and focuses the right pane), collapses/expands a directory, or toggles
-`… N more`/`… show fewer` (a project's or a goal's), `←/→`
-or `h/l` collapse/expand a directory, or a project's or goal's `… N more` row, `n` new
-session in the selected project (using the harness of the highlighted session).
-On a project heading or a goal row, with both harnesses installed, `n` first
-opens a small boxed harness picker (`π Pi`, `✳ Claude Code`), preselected on the
-inferred harness: `j/k`/arrows move, `1`–`9` or `Enter` pick, `Esc`/`q` cancel
-(nothing is created). Session rows, `goal_more` rows and `prefix + N` never
-ask; they use the inferred harness. With one harness installed, `n` never asks.
+Keys in the left pane: `↑/↓` or `j/k` move, `g/G` jump, `Enter` or a
+double-click presents a session (and focuses the right pane), collapses/expands
+a directory, goal, or slice, or reveals the next tier on a project's, goal's,
+or slice's `… N more` row (and `… show fewer` hides one tier). `[`/`]` are the
+detail pair, one level per press in both directions: `]` expands a collapsed
+project, goal or slice at the base tier, then reveals the next tier; `[` hides
+one tier, then collapses the container at the base tier. On a session row they
+act on its container; on a `more` row they step one tier down or up, and `[` at
+the base tier collapses the container. Expanding always shows the base tier.
+While a filter is active neither key changes the stored tier.
+`←/→` or `h/l` stay aliases for the same one-level `[`/`]` behaviour, `n` new
+session in the selected project. It opens one boxed picker with no section
+headings: the contextual `+ New goal` item appears on a project heading or
+loose session and `+ New slice` on a goal row or a session inside one (a slice
+row offers no contextual item), then one line per installed harness (`π Pi`,
+`✳ Claude Code`), preselected on the inferred harness. A divider rule separates
+the contextual item from the harnesses; the `+` sits in the harness index
+column and the label in the glyph column, so the item lines up with a harness
+row. `j/k`/`↑`/`↓` move — `↑` from the first harness returns to the
+contextual item and `↓` from it lands on the first harness — `Tab` switches
+between the item and the harnesses, `←`/`→` do nothing, `1`–`9` or `Enter`
+pick, and `Esc`/`q`/`Ctrl-C` cancel without creating anything. A harness item
+starts at
+once — loose, or inside the highlighted goal or slice. The Goal item then asks
+for a harness and a name, creates the goal or slice, and starts the session
+inside it. Project and goal rows open the box even with one harness installed;
+slice rows open it only when more than one harness is installed. Session rows
+and `prefix + N` skip the box and use the inferred harness. A slice row starts
+the session directly inside that slice and never offers a nested slice.
+`m` on a session opens the **Move to** box: `⌂ Top level` (no goal, i.e. loose)
+first, `+ New goal` (creates a top-level goal and moves the session into it)
+second, then a divider rule, then every goal of that project with its slices
+drawn as a tree under it — `├` for a sibling, `└` for the last child, and no
+connector line under a goal with no slices. The marker column holds one
+glyph: `⌂` on `Top level`, the words starting in the name column like every
+goal name; a `✓` marks the container the session is in now (never done), so
+it is `✓ Top level` for a loose session. A goal name starts in the next
+column, and a slice's connector sits in that same column with the slice name
+after it, so names never shift. Done goals and slices are dimmed. Labels are
+shown in full at normal widths; a narrow terminal or a very long name
+truncates with `…`.
+`j/k`/arrows move, `1`–`9` or `Enter` pick, and `Esc`/`q`/`Ctrl-C` cancel.
+Moving into a done goal or slice reopens and expands it; a running session
+keeps running across the move. On
+any other row `m` shows a footer warning and changes nothing. Both pickers also
+accept a click to pick an item, and a click outside either box cancels. The
+mouse mirrors the list actions — select, present, expand, reveal, and
+drag-to-move — as described in [Mouse](#mouse).
 `r` reload every managed Pi session (sends `/reload` to each live Pi pane and
-refreshes the session list), `/` filter (which auto-expands groups and also
-matches the harness name and goal names), `:` command line, `q` quit (this only detaches your client; the session keeps running).
-`:goal:create <name>` makes an empty goal in the highlighted row's project
-(case-insensitive duplicate names are refused); `Enter`/`h`/`l` collapse and
-expand it, and the state persists in `~/.sassywares/sassy-code/goals.json`.
-Goal-row keys (the footer then reads `⏎ toggle  n new  R rename  x done  D
-delete`): `R` opens the `:` line pre-filled with `goal:rename <name>` (empty or
-duplicate names are refused), `x` marks the goal done (`✓`, collapsed, sunk
-below the project's active goals) and `x` again reopens and expands it, and `D` asks
-`Delete goal '<name>'? y/n` in the footer; only `y` deletes. Deleting never
-touches sessions: its sessions become loose in the project. With an unreadable
-`goals.json` all three refuse with a footer warning. `--list` shows done goals
-with `✓`.
-A Pi `/handoff`, `/fork`, or `/clone` from a goal session stays in that goal
-when it lands in the same project. Known limits: a fork into another working
+refreshes the session list), `/` filter (which auto-expands groups, goals and
+slices and also matches the harness name plus goal and slice names), `x` marks
+a session done (`✓`, dimmed and sunk below active rows; the footer then reads
+`x undo`) and `x` again revives it, `:` command line, `q` quit
+(this only detaches your client; the session keeps running).
+`:goal:create <name>` makes an empty top-level goal in the highlighted row's
+project, and `:slice:create <name>` makes a slice under the highlighted goal
+(or under the parent of a highlighted slice); both refuse empty or
+case-insensitive duplicate names, where a duplicate means the same name under
+the same parent. `Enter` toggles a goal or slice, while `[`/`]` and `h`/`l`
+step one level at a time — collapsing at the base tier and hiding a tier above
+it — and the state persists in `~/.sassywares/sassy-code/goals.json`.
+Goal- and slice-row keys (the footer then reads `⏎ toggle  n new  R rename  x
+done  D delete`, or `x undo` once done): `R` opens the `:` line pre-filled with
+`goal:rename <name>` for a goal or `slice:rename <name>` for a slice (empty or
+duplicate sibling names are refused), `x` marks the goal or slice done (`✓`,
+collapsed, sunk below its active siblings) and `x` again reopens and expands it,
+and `D` asks `Delete goal '<name>'? y/n` or `Delete slice '<name>'? y/n` in the
+footer; only `y` deletes. Deleting a slice flattens only its own sessions;
+deleting a goal removes its slices and flattens every session in the whole
+subtree. Sessions are never touched in the store: they become loose and stay
+openable. With an unreadable `goals.json` all three refuse with a footer
+warning. Done session marks live in
+`~/.sassywares/sassy-code/sessions.json`, keyed by session id; an unreadable file
+hides the marks and refuses edits without being overwritten. New activity or
+`x` again revives a done session. `--list` nests slices under goals and shows
+done rows with `✓`. A Pi `/handoff`, `/fork`, or `/clone` from a goal or slice
+session stays in that container when it lands in the same project. Known limits: a fork into another working
 directory belongs to that project and stays loose, a lineage passing through
 another directory breaks (lineage resolves within one project), and a session started with Pi `/new` or Claude Code `/clear` inside a
 goal session has no link to it and lands loose; start new phases with `n` /
-`prefix + N` instead.
+`prefix + N` instead. Moves stay inside one project, and goals or slices
+themselves cannot be moved. A moved-out Pi session's `/handoff`, `/fork`, or
+`/clone` successors stay loose with it.
 The highlight is attached to the session, not the row, so it follows a session
 as new activity re-sorts the list. The footer wraps to show every binding at the
 default narrow panel width. Quitting (`q` or `Ctrl-C`) only detaches your client from the
@@ -112,13 +182,44 @@ run `sassy-code` again to reattach. To end it for good, run
 From anywhere in the window, `prefix + N` asks the panel to run its own `n`
 action — a new session in the project under the panel highlight — without
 moving focus, so the keyboard stays in the viewer (it sends the panel the
-internal key `N`, `n` without the picker, so it never asks which harness). The shortcut is installed
+internal key `N`, `n` without the new-session box, so it never asks which
+harness or target). The shortcut is installed
 only when that key is free; set `SASSY_CODE_NEW_KEY` to choose another.
 Switch back to the panel with your tmux prefix + arrow. The launcher removes
 repeat from tmux's default repeatable prefix+arrow `select-pane` bindings so the
 next arrow reaches the panel; bindings with a different command are left alone. A
 user binding byte-identical to tmux's default is indistinguishable and will
 be normalized.
+
+## Mouse
+
+The panel turns on terminal mouse reporting while it runs; a terminal without
+mouse support simply gets no mouse events, and the keyboard path is unchanged.
+
+- Click a session row to select it. Click the same row again within about 0.4
+  seconds to present it in the viewer; a single click never presents.
+- Click a project heading, a goal, or a slice to collapse or expand it.
+- Click a `… N more` row to reveal the next tier, or `… show fewer` to hide one
+  tier.
+- Scroll the wheel to move the highlight; one notch moves exactly one row, and
+  duplicate events from one notch (press then click) are debounced. Wheel-up
+  works on every Python/curses build. Wheel-down needs a curses build with
+  5-button support (`BUTTON5_*`); the macOS system ncurses has only four
+  buttons and drops a wheel-down notch before the panel sees it, so wheel-down
+  is inert there — best-effort, never emulated from another event.
+- Press on a session row, then release on a goal or slice in the same project to
+  move the session there. Release on that project's heading to make it loose.
+  While the button is down the footer reads `moving <title>…`; releasing
+  anywhere else — another session, a hint line, the gap between projects, or
+  another project — cancels the move.
+- Click a goal or harness item in the `n` box, or a target in the `m` box, to
+  pick it; click outside the box to cancel. A click on the divider in the `n`
+  box does nothing.
+- Clicking a hint line or the gap between projects does nothing.
+
+Hold `Shift` while dragging to select terminal text as usual: the terminal
+handles `Shift`-drag itself, so the panel never sees it. Without `Shift`, a drag
+that starts on a session row is a move.
 
 ## Optional: add an alias
 
@@ -175,8 +276,8 @@ a duplicate.
 For Pi, `/handoff`, `/fork`, and `/clone` replace the session inside the same Pi
 process, so the pane's command line and `@sassy_session` option keep naming the
 old session. The panel follows the successor recorded in the new file's
-`parentSession` header, re-tags the pane with it, and moves the **running**
-marker to that session. A second handoff can record the session the process was
+`parentSession` header, re-tags the pane with it, and moves the **in
+progress** marker to that session. A second handoff can record the session the process was
 started with as its parent, making the two successors siblings; the panel
 resolves the pane from both its tag and its command line and keeps the newest
 session in that lineage. When the switched session is the one in the viewer, the
@@ -243,15 +344,21 @@ JSONL:
 with `isSidechain: true` belong to subagents and are ignored for status and
 preview.
 
-Status is inferred from the last message (timestamps are UTC, rendered in the
-viewer's local zone):
+Status is inferred from the transcript and live processes (timestamps are UTC,
+rendered in the viewer's local zone). Precedence is
+`error > done > in progress > needs input > idle`:
 
-| status | rule |
-|---|---|
-| running | a live `pi --session` / `claude --resume` process runs this session, including a `/handoff`/`/fork` successor of the Pi session it was started with, or the newest session reachable from a managed pane's tag and command line |
-| error | last entry is a failed `toolResult`, an assistant `error`/`aborted`, or a Claude API error |
-| active | user spoke last, Claude is mid-`tool_use`, or modified within 5 minutes |
-| idle | otherwise |
+| status | mark | rule |
+|---|---|---|
+| in progress | `●` green | a live `pi --session` / `claude --resume` process has an unresolved turn: a user or tool result is being handled, or the last assistant turn has no terminal stop reason (a background run outliving an `end_turn` does not count; it only blocks reaping) |
+| needs input | `◐` yellow | a live process has finished its turn (or has no messages yet), a Claude `AskUserQuestion` has no answer, or a hidden session finished and kept an in-memory attention mark until presented |
+| idle | `·` blue | no live process and no attention mark |
+| error | `✗` red | last entry is a failed `toolResult`, an assistant `error`/`aborted`, or a Claude API error |
+| done | `✓` dim | marked with `x` in `sessions.json`; revived by new activity or `x` again |
+
+A hidden session that finishes a turn gets an in-memory attention mark, cleared
+when it is presented or starts a new turn and lost on restart. Attention never
+keeps a pane process alive.
 
 Parsed transcripts are cached by path, mtime, and size, because Claude
 transcripts are frequently large and the panel refreshes every two seconds.

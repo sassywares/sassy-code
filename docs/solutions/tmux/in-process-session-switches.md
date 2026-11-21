@@ -11,8 +11,8 @@ updated: 2026-10-23
 In a pane started with `pi --session <old>`, running `/handoff` (or `/fork`,
 `/clone`) replaced the session without the panel noticing:
 
-- The sidebar kept the green **running** marker on the old session and showed
-  the new one as idle, even though the new session was the live one.
+- The sidebar kept the green **in progress** marker on the old session and
+  showed the new one as idle, even though the new session was the live one.
 - Selecting the new session spawned a **second** `pi` for it in a background
   window and swapped that duplicate into the viewer, instead of switching to the
   pane that was already showing it.
@@ -48,11 +48,11 @@ Parse `parentSession` into `Session.parent_path` and follow the link:
   and its command line, keeping the newest reachable session. The tag alone is
   not enough: adoption can itself lag a second switch, and Pi may record the
   session the process was *started* with as `parentSession`.
-- `load_groups()` marks the followed session as **running**, not the argv id.
+- `load_groups()` marks the followed session as live, not the argv id.
   Each managed pane is resolved the same way as adoption, so a tag that lags an
-  in-process switch still marks the successor running. Process command lines
+  in-process switch still marks the successor live. Process command lines
   only count for Pi processes outside managed panes, so a pane's stale argv
-  cannot mark the replaced session running too.
+  cannot mark the replaced session live too.
 - `follow_viewer_switch()` moves the highlight (and the recorded current
   session) when the viewer pane's tag becomes a newer session in the presented
   session's handoff lineage. A highlight on any other row is left alone, so
@@ -68,8 +68,8 @@ The `created > last_ts` test matters: `/fork` from an earlier user message
 copies entries with their original timestamps, so activity alone cannot reveal
 the switch. A completed stale branch that was never live in this pane is not
 followed, and a completed copy (`/clone`, branch-at-tip) starts being followed
-once it records new activity. That keeps a live idle parent from being re-tagged
-by a fork or clone that exited elsewhere.
+once it records new activity. That keeps a live parent that is between turns
+from being re-tagged by a fork or clone that exited elsewhere.
 
 ## Sibling successors
 
