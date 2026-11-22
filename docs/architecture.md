@@ -165,7 +165,8 @@ it is inert. The `n` and `m` boxes route mouse events through the same
 ## State files
 
 Panel state lives in `~/.sassywares/sassy-code/`: `current` holds the presented
-session id, so a restart re-presents it.
+session id, so a restart re-presents it. `SASSY_CODE_STATE_DIR` moves the whole
+directory, which is how the README screenshot runs a demo store in a temp dir.
 
 - `goals.json` — `{"version": 1, "projects": {<cwd>: [goal, ...]}, "loose":
   {<cwd>: [session_id, ...]}}`. A goal's optional `parent` that is missing or

@@ -26,7 +26,12 @@ from panel.core import (
 )
 
 
-STATE_DIR = os.path.expanduser("~/.sassywares/sassy-code")
+# `SASSY_CODE_STATE_DIR` points the whole state dir elsewhere: the screenshot
+# capture (`.agents/skills/sassy-code-shot/`) mounts a demo store here so a
+# fixture run never reads or writes the real one.
+STATE_DIR = os.path.expanduser(
+    os.environ.get("SASSY_CODE_STATE_DIR") or "~/.sassywares/sassy-code"
+)
 
 
 def state_path(name: str) -> str:

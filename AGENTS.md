@@ -18,6 +18,8 @@ in [`docs/architecture.md`](docs/architecture.md); the words are in
 | `bin/` | `release` (vendored release script) and `release-ignore`. |
 | `.sassywares/` | Sassy Skills config and README (project-agnostic metadata). |
 | `.agents/skills/sassy-code-release/` | Project skill that runs `bin/release`. |
+| `.agents/skills/sassy-code-shot/` | Project skill that regenerates `assets/sassy-code.svg` from a demo store and commits it when it changed. |
+| `assets/sassy-code.svg` | The README screenshot. Text, not a bitmap: a panel change shows up as a readable diff. Never edit by hand. |
 | `tests/` | Isolated tmux tests (`tmux -L`, `-f /dev/null`), unit tests and key-binding regressions. |
 
 ## How to run
@@ -101,6 +103,14 @@ The module map and import graph are in
 - **Pi-only actions stay Pi-only.** `r` (`/reload`) targets managed Pi panes
   only; Claude Code has no equivalent. Claude transcripts have no session-level
   parent link, so in-process switches are a Pi concept.
+- **The README shot is generated from a fixture, never from your sessions.**
+  `sassy-code-shot` builds a throwaway tmux server and a temp store, so no real
+  title, project path or goal is ever published, and the output is
+  byte-reproducible (ages are relative offsets), which is what lets the hook
+  skip the commit when nothing changed. It runs on releases only, gated like
+  `bin/release` (consumer-facing change since the highest `v*` tag on origin),
+  because its own `assets/` commit would otherwise release itself. It runs
+  *before* `bin/release` so the tag carries the image.
 
 ## Testing
 
@@ -109,10 +119,13 @@ python3 -m unittest discover -s tests       # every test module
 python3 -m unittest tests.test_background   # isolated tmux lifecycle
 bash tests/tmux-pane-keys.sh                # key-binding regression
 bash tests/tmux-layout.sh                   # narrow-panel geometry, failing panel
+bash tests/shot-gate.sh                     # screenshot release gate, throwaway origin
 ```
 
 The discover run covers the store, row, mouse and move suites plus
-`test_sessions`, `test_claude_sessions`, `test_selection` and `test_reload`.
+`test_sessions`, `test_claude_sessions`, `test_selection`, `test_reload`,
+`test_shot_render` (the screenshot renderer, loaded by path from the skill) and
+`test_shot_env` (the two env knobs that fixture needs).
 Tmux tests use an isolated server (`tmux -L`, `-f /dev/null`). Tmux mouse tests
 are impractical, so `tests/test_mouse.py` covers the hit map and dispatch.
 
@@ -142,6 +155,7 @@ README is a review finding.
 | Change | Document |
 |---|---|
 | A key, mouse gesture, prompt, picker, `:` command, env var, dependency, layout, goal/limit/glyph/status mark or session store | `README.md` |
+| The README screenshot, its demo fixture or renderer | `.agents/skills/sassy-code-shot/` and [`docs/solutions/tooling/readme-screenshot.md`](docs/solutions/tooling/readme-screenshot.md) |
 | Process model, module map, data flow, reaping, state files | `docs/architecture.md` |
 | A rule or a must-not-break invariant | `AGENTS.md` |
 | A user-facing term added or renamed | `CONCEPTS.md` |

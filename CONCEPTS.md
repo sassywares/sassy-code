@@ -132,3 +132,10 @@ press-and-release **moves**. Gestures: [`README.md`](README.md#mouse).
 (`goal:create`, `goal:rename`, `slice:create`, `slice:rename`) and the rest its
 argument, so a name may contain `:`. Unlike `/`, which only filters, it changes
 state; refusals appear in the footer. *Avoid: palette, ex mode.*
+
+## The repository
+
+**README shot** — the image at the top of the README, rendered from a demo
+fixture rather than a live panel: it publishes nothing real and re-renders
+byte-identical, so it is refreshed only when a release is due. *Avoid:
+screenshot, capture, hero image.*

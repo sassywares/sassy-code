@@ -70,4 +70,6 @@ hooks:
     # a successful push, keyed by the pushed branch like hooks.pr. Same entry shape.
   push:
     "*":
-      after_push: [sassy-code-release]   # the push just succeeded
+      # The shot first: it must be inside the tag the release creates. It
+      # self-gates on "a release is due", so a docs-only push does nothing.
+      after_push: [sassy-code-shot, sassy-code-release]   # the push just succeeded

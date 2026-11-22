@@ -13,17 +13,34 @@ from panel.core import (
 )
 
 
+PS_ARGS = ["ps", "-axo", "pid=,ppid=,command="]
+
+
 def process_table(timeout: float = 5) -> list[Proc]:
-    """One bounded process snapshot, reused for status and pane liveness."""
-    try:
-        out = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,command="],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        ).stdout
-    except Exception:
-        return []
+    """One bounded process snapshot, reused for status and pane liveness.
+
+    `SASSY_CODE_PROCS_FIXTURE` names a file holding a `ps` snapshot in the same
+    format and replaces the live one. Liveness (and with it `in progress` and
+    `needs input`) otherwise depends on an agent process existing, so a demo
+    store cannot show the working states without it.
+    """
+    fixture = os.environ.get("SASSY_CODE_PROCS_FIXTURE")
+    if fixture:
+        try:
+            with open(fixture) as f:
+                out = f.read()
+        except OSError:
+            return []
+    else:
+        try:
+            out = subprocess.run(
+                PS_ARGS,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            ).stdout
+        except Exception:
+            return []
     procs = []
     for line in out.splitlines():
         parts = line.strip().split(None, 2)

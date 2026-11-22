@@ -1,0 +1,172 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="890" viewBox="0 0 1440 890" font-size="14" font-family="SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace">
+<rect width="1440" height="890" rx="12" fill="#282c34"/>
+<rect x="0" y="29.0" width="1440" height="1" fill="#3a3f4b"/>
+<circle cx="22.0" cy="15.0" r="5.5" fill="#ff5f57"/>
+<circle cx="44.0" cy="15.0" r="5.5" fill="#febc2e"/>
+<circle cx="66.0" cy="15.0" r="5.5" fill="#28c840"/>
+<text x="720.0" y="19.7" fill="#8b93a1" font-size="13" text-anchor="middle">sassy-code</text>
+<g transform="translate(0,30.0)">
+<rect x="0.0" y="0.0" width="508.8" height="16.0" fill="#ffffff"/>
+<text x="0.0" y="12.2" fill="#282c34" textLength="240.0" lengthAdjust="spacingAndGlyphs" font-weight="bold" xml:space="preserve"> Sassy Code — 37 sessions</text>
+<text x="518.4" y="12.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="28.2" fill="#70c0b1" textLength="172.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">▾ sassy-code  (15)</text>
+<text x="518.4" y="28.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="28.2" fill="#eaeaea" textLength="355.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  the switch target: the tag or argv?</text>
+<text x="0.0" y="44.2" fill="#ffffff" textLength="508.8" lengthAdjust="spacingAndGlyphs" font-weight="bold" xml:space="preserve">   ▾ Panel hardening  (6)                          2m</text>
+<text x="518.4" y="44.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="48.0" y="60.2" fill="#ffffff" textLength="460.8" lengthAdjust="spacingAndGlyphs" font-weight="bold" xml:space="preserve"> ▾ Tiers, moves and mouse  (3)                2m</text>
+<text x="518.4" y="60.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="60.2" fill="#8a8d91" textLength="528.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    Neither alone. The tag names the pane; argv lags an</text>
+<rect x="0.0" y="64.0" width="508.8" height="16.0" fill="#ffffff"/>
+<text x="0.0" y="76.2" fill="#282c34" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">        ● π swapping panes loses the goal row — i… 2m</text>
+<text x="518.4" y="76.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="76.2" fill="#8a8d91" textLength="528.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    in-process /new, so resolving from argv resumes the</text>
+<text x="0.0" y="92.2" fill="#f0c674" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">        ◐ ✳ Mouse hit map for the more rows        7m</text>
+<text x="518.4" y="92.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="92.2" fill="#8a8d91" textLength="518.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    predecessor and the session drops out of its goal.</text>
+<text x="0.0" y="108.2" fill="#707377" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">        ✓ π Truncate titles without reflowing th… 26m</text>
+<text x="518.4" y="108.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="124.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     · π Fable: describe the panel as a story      5h</text>
+<text x="518.4" y="124.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="124.2" fill="#8a8d91" textLength="566.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    Resolve from the tag and the command line together, and</text>
+<text x="0.0" y="140.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     · π Resume keeps the parent goal after /new   1d</text>
+<text x="518.4" y="140.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="140.2" fill="#8a8d91" textLength="566.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    leave the goal filing alone: it is keyed by session id,</text>
+<text x="57.6" y="156.2" fill="#8a8d91" textLength="86.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> … 1 more</text>
+<text x="518.4" y="156.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="156.2" fill="#8a8d91" textLength="268.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    which survives the swap.</text>
+<text x="0.0" y="172.2" fill="#ffffff" textLength="508.8" lengthAdjust="spacingAndGlyphs" font-weight="bold" xml:space="preserve">   ▸ Release automation  (2) ✗                     1h</text>
+<text x="518.4" y="172.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="188.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · π Wheel over the more row scrolls the panel     1h</text>
+<text x="518.4" y="188.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="188.2" fill="#8abeb7" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ●</text>
+<text x="566.4" y="188.2" fill="#ffffff" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">panel/panes.py</text>
+<text x="720.0" y="188.2" fill="#8a8d91" textLength="192.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">pane_switch_target()</text>
+<text x="1401.6" y="188.2" fill="#2e8b58" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">+18</text>
+<text x="0.0" y="204.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · π Palette on a light terminal                   3h</text>
+<text x="518.4" y="204.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="204.2" fill="#8abeb7" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ●</text>
+<text x="566.4" y="204.2" fill="#ffffff" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">panel/goals.py</text>
+<text x="720.0" y="204.2" fill="#8a8d91" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">attach_goals()</text>
+<text x="1411.2" y="204.2" fill="#2e8b58" textLength="19.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">+6</text>
+<text x="0.0" y="220.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · π README: the shell alias line                  6h</text>
+<text x="518.4" y="220.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="236.2" fill="#8a8d91" textLength="105.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">   … 4 more</text>
+<text x="518.4" y="236.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="236.2" fill="#2e8b58" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ●</text>
+<text x="566.4" y="236.2" fill="#ffffff" textLength="38.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">bash</text>
+<text x="624.0" y="236.2" fill="#8a8d91" textLength="345.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">python3 -m unittest tests.test_goals</text>
+<text x="988.8" y="236.2" fill="#2e8b58" textLength="19.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">ok</text>
+<text x="1392.0" y="236.2" fill="#8a8d91" textLength="48.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">3.42s</text>
+<text x="518.4" y="252.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="268.2" fill="#70c0b1" textLength="182.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">▾ sassy-skills  (5)</text>
+<text x="518.4" y="268.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="268.2" fill="#8a8d91" textLength="537.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    ran 61 tests; resume-after-swap was the failing case</text>
+<text x="0.0" y="284.2" fill="#ffffff" textLength="508.8" lengthAdjust="spacingAndGlyphs" font-weight="bold" xml:space="preserve">   ▾ Artifact routing  (3)                         3m</text>
+<text x="518.4" y="284.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="284.2" fill="#8a8d91" textLength="211.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    and it passes now.</text>
+<text x="0.0" y="300.2" fill="#00ff00" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     ● π Artifact routing for a multi-repo worksp… 3m</text>
+<text x="518.4" y="300.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="316.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     · ✳ Handoff file: /tmp or the project?       58m</text>
+<text x="518.4" y="316.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="316.2" fill="#eaeaea" textLength="345.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  and a pane that was swapped twice?</text>
+<text x="0.0" y="332.2" fill="#707377" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     ✓ π Grill harder on the deploy branch         4h</text>
+<text x="518.4" y="332.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="348.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · π Scout brief: one per area, not per plan       6h</text>
+<text x="518.4" y="348.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="348.2" fill="#8a8d91" textLength="566.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    The tag wins again: it is rewritten on every swap, argv</text>
+<text x="0.0" y="364.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · π Plan template: keep the mode row             15h</text>
+<text x="518.4" y="364.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="364.2" fill="#8a8d91" textLength="528.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    is only ever what the pane started with. The switch</text>
+<text x="518.4" y="380.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="380.2" fill="#8a8d91" textLength="576.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    target stays tag-first, command line as the fallback for</text>
+<text x="0.0" y="396.2" fill="#70c0b1" textLength="144.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">▾ acme-api  (5)</text>
+<text x="518.4" y="396.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="396.2" fill="#8a8d91" textLength="297.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    panes that predate the tag.</text>
+<text x="0.0" y="412.2" fill="#ffffff" textLength="508.8" lengthAdjust="spacingAndGlyphs" font-weight="bold" xml:space="preserve">   ▸ Multi-tenant billing  (2) ●                   6m</text>
+<text x="518.4" y="412.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="428.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · π Queue drain stalls at forty items            35m</text>
+<text x="518.4" y="428.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="428.2" fill="#8abeb7" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ●</text>
+<text x="566.4" y="428.2" fill="#ffffff" textLength="124.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">panel/core.py</text>
+<text x="710.4" y="428.2" fill="#8a8d91" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">pane_is_live()</text>
+<text x="1411.2" y="428.2" fill="#2e8b58" textLength="19.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">+3</text>
+<text x="0.0" y="444.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · π The webhook signature is stale                3h</text>
+<text x="518.4" y="444.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="460.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · ✳ PDF templates keep the old header             5h</text>
+<text x="518.4" y="460.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="460.2" fill="#8a8d91" textLength="585.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    An empty process snapshot is unknown, not dead: fall back</text>
+<text x="518.4" y="476.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="476.2" fill="#8a8d91" textLength="556.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    to the tag-only answer instead of reaping a live pane.</text>
+<text x="0.0" y="492.2" fill="#70c0b1" textLength="105.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">▾ knit  (4)</text>
+<text x="518.4" y="492.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="508.2" fill="#00ff00" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> ● π Yarn colour lookup in the swatch grid        12m</text>
+<text x="518.4" y="508.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="508.2" fill="#eaeaea" textLength="211.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  and after a restart?</text>
+<text x="0.0" y="524.2" fill="#ffffff" textLength="508.8" lengthAdjust="spacingAndGlyphs" font-weight="bold" xml:space="preserve">   ▸ Pattern printing  (2)                         2h</text>
+<text x="518.4" y="524.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="540.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · π PDF export embeds the chart fonts             1d</text>
+<text x="518.4" y="540.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="540.2" fill="#8a8d91" textLength="556.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    Same answer. The tag lives on the pane, so a restarted</text>
+<text x="518.4" y="556.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="556.2" fill="#8a8d91" textLength="576.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    viewer is re-tagged before the panel paints; only a pane</text>
+<text x="0.0" y="572.2" fill="#70c0b1" textLength="144.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">▾ web-shop  (5)</text>
+<text x="518.4" y="572.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="572.2" fill="#8a8d91" textLength="432.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    that never had one falls through to argv.</text>
+<text x="0.0" y="588.2" fill="#ffffff" textLength="508.8" lengthAdjust="spacingAndGlyphs" font-weight="bold" xml:space="preserve">   ▾ Checkout redesign  (3)                       33m</text>
+<text x="518.4" y="588.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="604.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     · π Cart drawer traps focus on escape        33m</text>
+<text x="518.4" y="604.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="604.2" fill="#2e8b58" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ●</text>
+<text x="566.4" y="604.2" fill="#ffffff" textLength="38.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">bash</text>
+<text x="624.0" y="604.2" fill="#8a8d91" textLength="153.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">brain/restart.sh</text>
+<text x="1411.2" y="604.2" fill="#2e8b58" textLength="19.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">ok</text>
+<text x="0.0" y="620.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     · ✳ Shipping estimate rounds down             2h</text>
+<text x="518.4" y="620.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="620.2" fill="#8a8d91" textLength="518.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">      swapped 2 panes, re-tagged both, goal membership</text>
+<text x="0.0" y="636.2" fill="#707377" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     ✓ π Tax rules for the EU store                9h</text>
+<text x="518.4" y="636.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="636.2" fill="#8a8d91" textLength="288.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">      unchanged for 4 sessions</text>
+<text x="0.0" y="652.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · π Currency rounding at checkout                 7h</text>
+<text x="518.4" y="652.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="668.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · ✳ Contrast on the disabled button               1d</text>
+<text x="518.4" y="668.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="668.2" fill="#eaeaea" textLength="211.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  so what do I change?</text>
+<text x="518.4" y="684.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0.0" y="700.2" fill="#70c0b1" textLength="105.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">▾ tap2  (3)</text>
+<text x="518.4" y="700.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="700.2" fill="#8a8d91" textLength="585.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    One helper, `pane_switch_target()`, already resolves from</text>
+<text x="0.0" y="716.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · ✳ Calibrate the tap threshold per device        8h</text>
+<text x="518.4" y="716.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="716.2" fill="#8a8d91" textLength="595.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    both. Put the rule in its docstring, point the two callers</text>
+<text x="0.0" y="732.2" fill="#81a2be" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · π Idle poll every twenty milliseconds           1d</text>
+<text x="518.4" y="732.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="732.2" fill="#8a8d91" textLength="499.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    at it, and add the swap-twice case to the suite.</text>
+<text x="0.0" y="748.2" fill="#707377" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> ✓ π Two-finger tap fires twice                   44m</text>
+<text x="518.4" y="748.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="518.4" y="764.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="764.2" fill="#8abeb7" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ●</text>
+<text x="566.4" y="764.2" fill="#ffffff" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">panel/panes.py</text>
+<text x="720.0" y="764.2" fill="#8a8d91" textLength="192.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">pane_switch_target()</text>
+<text x="1411.2" y="764.2" fill="#cc6666" textLength="19.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">−9</text>
+<text x="518.4" y="780.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="518.4" y="796.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="796.2" fill="#8a8d91" textLength="912.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">───────────────────────────────────────────────────────────────────────────────────────────────</text>
+<rect x="0.0" y="800.0" width="508.8" height="16.0" fill="#ffffff"/>
+<text x="0.0" y="812.2" fill="#282c34" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↑/↓ move  ⏎ present  n new  / filter  : cmd  r reload</text>
+<text x="518.4" y="812.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="812.2" fill="#81a2be" textLength="230.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ~/workspace/sassy-code</text>
+<text x="768.0" y="812.2" fill="#8a8d91" textLength="230.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">(main) · Panel hardening</text>
+<text x="1104.0" y="812.2" fill="#8a8d91" textLength="316.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↑41k ↓8.2k CH88% $0.048 4.1%/1.0M</text>
+<rect x="0.0" y="816.0" width="508.8" height="16.0" fill="#ffffff"/>
+<text x="0.0" y="828.2" fill="#282c34" textLength="211.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">m move  x done  q quit</text>
+<text x="518.4" y="828.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="528.0" y="828.2" fill="#c5c8c6" textLength="76.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ▶ work</text>
+<text x="1113.6" y="828.2" fill="#8a8d91" textLength="307.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">(deepseek) deepseek-flash · high</text>
+</g>
+<rect x="0" y="862.0" width="1440" height="28.0" fill="#2e8b58"/>
+<g transform="translate(0,868.0)">
+<rect x="0.0" y="0.0" width="1440.0" height="16.0" fill="#2e8b58"/>
+<text x="0.0" y="12.2" fill="#1d1f21" textLength="249.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">[sassy-code] 0:sassy-code*</text>
+</g>
+</svg>
