@@ -18,10 +18,23 @@ import sys
 import time
 
 from panel import actions as _actions, boxes as _boxes, core, goals as _goals
+from panel import help as _help
 from panel import mouse as _mouse, panes as _panes, rows as _rows
 from panel import state as _state, status as _status, tmuxctl as _tmux
-from panel import view as _view
+from panel import trash as _trash, view as _view
 from panel.core import Group, Goal, Session
+
+
+def _restored_row_key(groups: list[Group], cwd: str, session_id: str):
+    """`rows.row_key` for a session just reloaded from a restore, or None."""
+    group = next((g for g in groups if g.cwd == cwd), None)
+    session = next(
+        (s for s in (group.sessions if group else []) if s.id == session_id),
+        None,
+    )
+    if group is None or session is None:
+        return None
+    return _rows.row_key(("session", group, session))
 
 
 class App:
@@ -82,6 +95,7 @@ class App:
         self.pane = _tmux.panel_pane_id()
         _tmux.set_panel_tag(self.pane)
         _state.migrate_state()
+        _trash.prune()
         self.presented = _state._read_state()
         if not self.presented:
             # No record yet: take the session already in the viewer as presented.
@@ -131,10 +145,18 @@ class App:
             f" moving {self.drag[2].title}… " if self.drag is not None
             else self.message
         )
+        notice = " ".join(
+            warning.strip()
+            for warning in (
+                _state.GOALS_UNREADABLE if unreadable else "",
+                _state.sessions_guard(),
+                _state.trash_guard(),
+            )
+            if warning.strip()
+        )
         result = _view.draw(
             self.stdscr, self.groups, self.flt, self.cursor, self.offset,
-            self.collapsed, footer, self.expanded,
-            _state.GOALS_UNREADABLE if unreadable else _state.sessions_guard(),
+            self.collapsed, footer, self.expanded, notice,
         )
         hits = {}
         if isinstance(result, tuple) and len(result) >= 3:
@@ -170,9 +192,12 @@ class App:
             _state._write_state(self.presented)
 
     def say(self, text: str, key=None) -> None:
-        """Show *text* in the footer for a few seconds; select *key* if given."""
+        """Show *text* in the footer for a few seconds; select *key* if given.
+
+        Footer padding is applied once here, so callers return bare messages.
+        """
         if text:
-            self.message = text
+            self.message = f" {text.strip()} "
             self.message_until = time.time() + 4
         if key is not None:
             self.selected = key
@@ -430,6 +455,14 @@ class App:
                 # Land on the new goal: show its project and drop the filter.
                 self.flt = ""
             return True
+        elif ch == ord("?"):
+            self.drag = None
+            try:
+                _help.help_box(stdscr)
+            except KeyboardInterrupt:
+                if self.quit_keys():
+                    return False
+            return True
         elif ch == ord("R"):
             text, warning = _actions.rename_prefill(row)
             if not text:
@@ -491,7 +524,45 @@ class App:
                 return True
             if answer != ord("y"):
                 return True
-            self.say(*_actions.delete_goal_row(self.groups, row))
+            if row and row[0] == "session":
+                message, key = _actions.delete_session_row(
+                    self.groups, row, self.presented, self.reap_state,
+                    self.target, rows,
+                )
+            else:
+                message, key = _actions.delete_goal_row(
+                    self.groups, row, self.presented, self.reap_state,
+                    self.target,
+                )
+            self.groups = _status.load_groups()
+            # The delete itself clears `current` when it takes that session.
+            self.presented = _state._read_state()
+            self.say(message, key)
+            return True
+        elif ch == ord("t"):
+            entries, unreadable = _trash.load_entries()
+            if unreadable:
+                self.say(_state.TRASH_UNREADABLE)
+                return True
+            self.drag = None
+            try:
+                picked = _boxes.trash_box(stdscr, entries)
+            except KeyboardInterrupt:
+                if self.quit_keys():
+                    return False
+                return True
+            if picked is None:
+                return True
+            ok, message = _trash.restore_entry(picked)
+            self.groups = _status.load_groups()
+            key = (
+                _restored_row_key(
+                    self.groups, picked.get("cwd", ""),
+                    picked.get("session_id", ""),
+                )
+                if ok else None
+            )
+            self.say(message, key)
             return True
         elif ch in (ord("n"), ord(core.NEW_NO_PICKER_KEY)):
             if row:

@@ -908,7 +908,6 @@ class BackgroundLifecycleTests(unittest.TestCase):
         member = self.write_session("member1", "stop", offset=-10)
         goal = panel.create_goal(str(self.tmp), "Phase work")
         panel.file_session_in_goal(str(self.tmp), goal.id, "member1")
-        before = member.read_bytes()
         win = self.tmux(
             "new-window", "-d", "-P", "-F", "#{window_id}",
             "-n", "e2e", "sleep", "60",
@@ -975,9 +974,13 @@ class BackgroundLifecycleTests(unittest.TestCase):
         keys("-l", "y")
         self.assertTrue(self.wait_until(lambda: record() is None), screen())
 
-        self.assertEqual(member.read_bytes(), before)
+        self.assertFalse(member.exists())
+        entries, _ = panel.load_entries()
+        self.assertEqual(
+            [e["session_id"] for e in entries], ["member1"]
+        )
         rows = list(panel.rows_for(panel.load_groups(), ""))
-        self.assertIn(
+        self.assertNotIn(
             ("session", "member1"),
             [(k, getattr(x, "id", None)) for k, _g, x in rows],
         )

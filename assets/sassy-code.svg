@@ -152,14 +152,12 @@
 <text x="518.4" y="780.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="518.4" y="796.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="528.0" y="796.2" fill="#8a8d91" textLength="912.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">───────────────────────────────────────────────────────────────────────────────────────────────</text>
-<rect x="0.0" y="800.0" width="508.8" height="16.0" fill="#ffffff"/>
-<text x="0.0" y="812.2" fill="#282c34" textLength="508.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↑/↓ move  ⏎ present  n new  / filter  : cmd  r reload</text>
 <text x="518.4" y="812.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="528.0" y="812.2" fill="#81a2be" textLength="230.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ~/workspace/sassy-code</text>
 <text x="768.0" y="812.2" fill="#8a8d91" textLength="230.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">(main) · Panel hardening</text>
 <text x="1104.0" y="812.2" fill="#8a8d91" textLength="316.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↑41k ↓8.2k CH88% $0.048 4.1%/1.0M</text>
 <rect x="0.0" y="816.0" width="508.8" height="16.0" fill="#ffffff"/>
-<text x="0.0" y="828.2" fill="#282c34" textLength="211.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">m move  x done  q quit</text>
+<text x="0.0" y="828.2" fill="#282c34" textLength="432.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">⏎ present  R rename  m move  x done  D delete</text>
 <text x="518.4" y="828.2" fill="#3a3f4b" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="528.0" y="828.2" fill="#c5c8c6" textLength="76.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ▶ work</text>
 <text x="1113.6" y="828.2" fill="#8a8d91" textLength="307.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">(deepseek) deepseek-flash · high</text>

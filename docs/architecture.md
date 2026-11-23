@@ -65,30 +65,35 @@ reached as `panel.main.<name>`.
 
 | Module | Lines | Contents |
 |---|---|---|
-| `__init__.py` | 37 | Facade: wildcard re-exports of every non-app module, plus a few leading-underscore names tests read. Reads only. |
+| `__init__.py` | 40 | Facade: wildcard re-exports of every non-app module, plus a few leading-underscore names tests read. Reads only. |
 | `__main__.py` | 3 | `from panel.main import main; raise SystemExit(main())`. |
-| `main.py` | 667 | `App` (`setup`, `run`, `dispatch_key`, `refresh`, `draw`, `teardown`, `set_tier`), `main_curses`/`_main_curses` (the curses wrapper seam and event loop), `list_lines`, `main()` and its argparse. |
-| `core.py` | 327 | Constants (stores, state filenames, limits, columns, `STATUS`, `HARNESS`, mouse masks, `MOVE_*`, `REAP_GRACE`, `LEGACY_STATE_FILE`), the five dataclasses, time/text/width helpers, `rel_time`, `_infer_status`, and in-memory attention (`mark_attention`, `clear_attention`, `attention_active`). |
-| `parsers.py` | 447 | Claude transcript helpers and task-run tracking, `parse_pi_session`, `parse_claude_session`, `parse_session`. |
-| `procs.py` | 153 | `process_table`, `descendants`, command detection, `running_session_processes`. |
-| `state.py` | 364 | `STATE_DIR`, the legacy state-file migration, read/write `current`, and both JSON stores (`goals.json`, `sessions.json`) with validation, atomic writes, mtime+size caches, corrupt-file guards and done marks. |
-| `goals.py` | 589 | Goal records and loading, `parentSession` inheritance, create/rename/done/delete/move/filing, tree queries and rollup, hints, `new_session_plan`, `new_box_goal_action`, `new_box_sections`, `should_open_new_box`. |
-| `tmuxctl.py` | 224 | Pure tmux plumbing: `tmux()`, pane queries, `layout_panes`, `managed_panes`, `viewer_pane_id`, `panel_pane_for`, tags, swap, focus, `send_reload`, `_spawn_bg_window`. No policy, no liveness decision. |
+| `main.py` | 741 | `App` (`setup`, `run`, `dispatch_key`, `refresh`, `draw`, `teardown`, `set_tier`), `main_curses`/`_main_curses` (the curses wrapper seam and event loop), `list_lines`, `main()` and its argparse. |
+| `core.py` | 345 | Constants (stores, state filenames, limits, columns, `STATUS`, `HARNESS`, mouse masks, `MOVE_*`, `REAP_GRACE`, `LEGACY_STATE_FILE`), the five dataclasses, time/text/width helpers, `rel_time`, `_infer_status`, and in-memory attention (`mark_attention`, `clear_attention`, `attention_active`). |
+| `keymap.py` | 221 | The one binding table (`Row(scope, keys, action, footer, menu, also, listed)`, `ROWS`), `scope_for_row`, `footer_for_scope`, `footer_items`, `menu_rows`, `listed_rows`. `also` holds a hidden alias and a `menu=False`/`listed=False` row stays wired. |
+| `parsers.py` | 488 | Claude transcript helpers and task-run tracking, `parse_pi_session`, `parse_claude_session`, `parse_session`, and `write_title` (the native title append a rename writes). |
+| `procs.py` | 170 | `process_table`, `descendants`, command detection, `running_session_processes`. |
+| `state.py` | 505 | `STATE_DIR`, the legacy state-file migration, read/write `current`, and the JSON stores (`goals.json`, `sessions.json`, `trash/index.json`) with validation, atomic writes, mtime+size caches, corrupt-file guards and done marks. |
+| `goals.py` | 698 | Goal records and loading, `parentSession` inheritance, create/rename/done/delete/move/filing, tree queries and rollup, hints, `new_session_plan`, `new_box_goal_action`, `new_box_sections`, `should_open_new_box`, and delete/restore snapshots of goal membership. |
+| `tmuxctl.py` | 230 | Pure tmux plumbing: `tmux()`, pane queries, `layout_panes`, `managed_panes`, `viewer_pane_id`, `panel_pane_for`, tags, swap, focus, `send_reload`, `_spawn_bg_window`. No policy, no liveness decision. |
 | `panes.py` | 397 | Harness data and spawn helpers, session index/switch, liveness (`pane_has_agent`, `pane_is_live`, `pane_switch_target`), adoption, `visible_layout`, `refresh_hidden`, `reap_hidden`, `reload_managed_panes`. |
 | `status.py` | 177 | `pending_turn`, `session_status`, `session_files`/`read_session` with the parse cache, `load_groups`. |
+| `trash.py` | 729 | The delete preflight (`busy_reason`), the `SIGTERM`-only stop, trash load/prune/purge, `delete_session`, the `delete_subtree` cascade transaction, `restore_entry`, pane cleanup and the picker filter. |
 | `rows.py` | 496 | Recency, `canonical_group_names`, the tier map and limits, `GoalPlan`/`plan_goal`, `rows_for`, `row_key`. |
-| `view.py` | 460 | Footer constants and lines, `hit_test`, `goal_hint`, `session_depths`, `follow_viewer_switch`, `highlighted_row`, `build_lines`, `draw`. |
 | `mouse.py` | 245 | `mouse_kind`, `click_kind`, drag/press/release helpers, `wheel_notch`, `more_click_action`, `cursor_for_key`, `mouse_debug`. |
-| `boxes.py` | 605 | `run_picker`, the new-session box and the Move-to box with their key handlers. |
-| `actions.py` | 493 | `present_session`, `new_session`, `detach_panel`, `run_command`, `prompt_line`, and every goal/session row action. |
+| `view.py` | 422 | `footer_items` (delegating to `keymap`), `footer_lines`, `hit_test`, `goal_hint`, `session_depths`, `follow_viewer_switch`, `highlighted_row`, `build_lines`, `draw`. |
+| `help.py` | 173 | The `?` keys menu: `help_lines`, `help_box_key`, `help_mouse_pick` and `help_box`, drawn through `boxes.run_picker`; long actions wrap onto non-selectable continuation lines. |
+| `boxes.py` | 923 | `run_picker` (with an optional pinned footer), the new-session box, the Move-to box and the project-grouped Trash box with its aligned rows and key handlers. |
+| `actions.py` | 571 | `present_session`, `new_session`, `detach_panel`, `run_command`, `prompt_line`, and every goal/session row action, including delete/restore/purge. |
 
 Import direction, bottom-up; no cycles, nothing imports upward:
-`core` imports nothing internal; `parsers`, `procs`, `tmuxctl` and `state`
-import only `core`; `goals` adds `state`; `status` adds `panes`, `tmuxctl`,
-`parsers`, `procs`, `state` and `goals`; `rows` adds `goals`;
-`view`, `mouse`, `boxes` and `actions` may import any of them (`boxes` calls
-`actions`, never the reverse); `main` may import any module, and `__main__.py`
-is the only module that imports `main`.
+`core` and `keymap` import nothing internal; `parsers`, `procs`, `tmuxctl` and
+`state` import only `core`; `goals` adds `state`; `status` adds `panes`,
+`tmuxctl`, `parsers`, `procs`, `state` and `goals`; `trash` adds `status`;
+`rows` adds `goals`; `view` adds `keymap`; `mouse`, `boxes`, `help` and
+`actions` may import any of them (`boxes` and `actions` call `trash`, never the
+reverse; `boxes` calls `actions`, never the reverse; `boxes` and `help` call
+`keymap` for their rendered rows); `main` may import any module, and
+`__main__.py` is the only module that imports `main`.
 
 ## Data flow
 
@@ -98,7 +103,12 @@ is the only module that imports `main`.
    title, harness, timestamps, last role/stop reason, token counts, Claude
    bookkeeping), cached by path, mtime and size because Claude transcripts are
    large and the refresh runs every two seconds. Timestamps are UTC epochs,
-   rendered only at draw time.
+   rendered only at draw time. A rename appends one native title line with
+   `parsers.write_title`; the line type and field come from
+   `core.HARNESS[harness]["title"]`, so the writer has no harness branch. The
+   append is metadata, not a message, so a live or mid-turn session may be
+   renamed; the size change invalidates the parse cache and the next refresh
+   reads the new title. There is no local title copy.
 2. `procs.process_table()` and `panes` resolve live panes;
    `status.session_status()` merges the file-derived base with the live process,
    the done mark and attention; `load_groups()` sorts sessions into `Group`s by
@@ -175,13 +185,76 @@ directory, which is how the README screenshot runs a demo store in a temp dir.
 - `sessions.json` — `{"version": 1, "sessions": {<id>: {"done": true,
   "done_at": <epoch>}}}`; activity newer than `done_at` revives a session
   without a write.
+- `trash/index.json` — `{"version": 1, "entries": [entry, ...]}`, one entry per
+  deleted session: `session_id`, `harness`, `title`, `original_path`,
+  `trashed_path`, `cwd`, `goal_id`, `loose`, `done`, `deleted_at`. Transcripts
+  live under `trash/files/`; a collision gets a timestamped name. Entries older
+  than seven days are pruned on start.
 
-Both stores are cached by mtime and size and written atomically: re-read, write
-a temp file in the state dir, rename. A missing file means no goals or no done
-marks; a corrupt or wrong-shape file hides that data, refuses edits, warns in
-the footer and is never overwritten. The old `~/.sassy-code-current` migrates
-in once on start, and the new file wins if both exist. Attention marks are in
-memory only and lost on restart.
+All stores are cached by mtime and size and written atomically: re-read, write
+a temp file in the state dir, rename. A missing file means no goals, no done
+marks or no trash; a corrupt or wrong-shape file hides that data, refuses
+edits, warns in the footer and is never overwritten. The old
+`~/.sassy-code-current` migrates in once on start, and the new file wins if
+both exist. Attention marks are in memory only and lost on restart.
+
+## Delete and trash
+
+`D` on a session runs one preflight before anything moves. The transcript must
+be readable and show no unresolved turn (`pending_turn()`), no open background
+work or queued input, and the process snapshot must not be empty. An agent in
+the session's managed panes is safe; an agent running under another session id
+or outside managed panes refuses as external. The predicate and the stop live in
+`panel.trash`, and the goal/slice cascade reuses both: it preflights every
+explicit and inherited session in the subtree, and one unsafe member refuses the
+whole delete before anything moves. A managed agent gets `SIGTERM` and up to three
+seconds; a timeout refuses with nothing deleted, and the panel never sends
+`SIGKILL` or signals a shell or tmux.
+
+After the stop, the transcript moves to `trash/files/`, the manifest entry is
+written, and the session's done record and explicit goal/loose membership are
+removed. If writing `current` or a store fails after the move, the transcript
+moves back and the records are rolled back. A presented session leaves its pane
+alive as a shell and clears the pane's `@sassy_session` tag; a hidden background
+pane is killed and dropped from the reap state. On success the highlight goes to
+the row that took the deleted row's place: the row below, else the row above,
+else the project heading. The neighbour is taken from the rows as drawn, so a
+filter or a tier is honored, and a tier row (`more`, `goal_more`, `slice_more`)
+is skipped because deleting a session lowers the hidden count and that row may
+not be drawn next time.
+
+`delete_subtree()` is the container cascade, one transaction over
+`goal_subtree_members()`. It re-derives the member set from a fresh
+`goals.json` parse before the first move, so a session another writer moved out
+of the subtree is left alone and recorded entries match what is actually moved.
+Every manifest entry is computed before the first transcript moves, so a store
+read cannot fail halfway. It stops the whole subtree first, then moves every
+transcript, then rewrites the trash index, the done marks and the goal records;
+each store write is atomic and happens once. A stop failure aborts before any
+move and leaves already-stopped sessions stopped. A move or write failure after
+the first file moved rolls every transcript back, drops the entries whose files
+returned, restores the done marks and leaves the goal records unchanged. When a
+transcript cannot be moved back, the footer says so and that file stays in the
+trash (indexed whenever the index is writable) instead of disappearing. On
+success it selects the parent goal (for a slice) or the project heading.
+
+`t` opens the Trash picker. Entries are grouped by project, deterministically
+ordered by project name and newest first inside a group, with a non-selectable
+project header line starting each group and a `PICKER_DIVIDER` rule between
+groups (never above the first header and none in the empty or empty-filter
+states). Each row is one aligned display line with title, harness and
+right-aligned age columns; the title takes the width the dropped project column
+freed and is truncated with `…` first, so the harness and age survive a narrow
+panel. The box pins an action line read from the keymap's `Trash entry` rows
+(`⏎ restore  d purge`) below a separator rule: the panel footer behind a modal
+box is stale and may be covered, so the box owns its own visible actions. Neither
+the header nor the rule nor the hints are selectable or pickable. `Enter` restores: the
+transcript moves back to its original path, the done record returns, and
+`file_session_on_restore()` files it in its recorded goal or slice, reopening
+and expanding that container. A missing container leaves the session loose. If
+the original path is occupied or the trash copy is missing, restore refuses and
+leaves the entry alone. `d` then `y` purges the entry and transcript for good;
+purge also runs automatically for entries older than seven days at startup.
 
 ## Reaping
 

@@ -121,6 +121,12 @@ def set_pane_tag(pane_id: str, session_id: str) -> None:
         tmux("set-option", "-p", "-t", pane_id, core.PANE_OPTION, session_id)
 
 
+def clear_pane_tag(pane_id: str) -> None:
+    """Drop a pane's session identity after its session is deleted."""
+    if pane_id:
+        tmux("set-option", "-p", "-u", "-t", pane_id, core.PANE_OPTION)
+
+
 def set_panel_tag(pane_id: str) -> None:
     """Mark this pane as the control panel so external bindings can find it."""
     if pane_id:

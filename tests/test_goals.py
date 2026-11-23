@@ -626,34 +626,17 @@ class NestingTests(unittest.TestCase):
         self.assertEqual(rows[panel.cursor_for_key(rows, key)][0], "goal")
 
     def test_footer_by_row_kind(self):
+        # The D14 literals live in tests/test_keys.py; here only the goal-more
+        # rewrite and the footer join/wrap are covered.
         g = self.group()
-        goal_items = panel.footer_items(("goal", g, g.goals[0]))
-        self.assertIn("⏎ toggle", goal_items)
-        self.assertNotIn("⏎ present", goal_items)
+        goal = g.goals[0]
         self.assertEqual(
-            panel.footer_items(("session", g, g.sessions[0])),
-            panel.view.SESSION_FOOTER_ITEMS,
+            panel.footer_items(("goal_more", g, (goal, 2, True))),
+            ("⏎ less",),
         )
-        self.assertIn("x done", panel.view.SESSION_FOOTER_ITEMS)
-        self.assertEqual(panel.footer_items(None), panel.view.FOOTER_ITEMS)
-        self.assertEqual(
-            goal_items,
-            ("⏎ toggle", "n new", "R rename", "x done", "D delete"),
-        )
-        self.assertEqual(
-            panel.footer_items(("goal_more", g, g.goals[0])),
-            panel.view.FOOTER_ITEMS,
-        )
-        group_items = panel.footer_items(("group", g, None))
-        self.assertEqual(
-            group_items,
-            tuple("⏎ toggle" if i == "⏎ present" else i for i in panel.view.FOOTER_ITEMS),
-        )
-        self.assertEqual(group_items[0], "↑/↓ move")
-        self.assertIn("⏎ toggle", group_items)
-        self.assertNotIn("⏎ present", group_items)
+        goal_items = panel.footer_items(("goal", g, goal))
         line = panel.footer_lines(goal_items, 80)[0]
-        self.assertIn("⏎ toggle  n new", line)
+        self.assertEqual(line, "  ".join(goal_items))
 
 
 class InheritanceTests(GoalStoreCase):

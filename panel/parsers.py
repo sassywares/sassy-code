@@ -7,8 +7,10 @@ import re
 
 from panel.core import (
     CLAUDE_SESSION_FILE_RE,
+    HARNESS,
     Session,
     _infer_status,
+    clean_name,
     clean_preview,
     iso_to_epoch,
     text_of,
@@ -205,8 +207,8 @@ def parse_pi_session(path: str) -> Session | None:
             continue
         s.last_ts = max(s.last_ts, iso_to_epoch(o.get("timestamp", "")))
         t = o.get("type")
-        if t == "session_info":
-            s.name = o.get("name", "") or s.name
+        if t == HARNESS["pi"]["title"]["type"]:
+            s.name = o.get(HARNESS["pi"]["title"]["field"], "") or s.name
         elif t == "message":
             m = o.get("message", {})
             role = m.get("role")
@@ -352,8 +354,8 @@ def parse_claude_session(path: str) -> Session | None:
         t = o.get("type")
         if t == "summary":
             summary = o.get("summary", "") or summary
-        elif t == "custom-title":
-            custom = o.get("customTitle", "") or custom
+        elif t == HARNESS["claude"]["title"]["type"]:
+            custom = o.get(HARNESS["claude"]["title"]["field"], "") or custom
         elif t == "ai-title":
             ai = o.get("aiTitle", "") or ai
         elif t == "user":
@@ -445,3 +447,42 @@ def parse_session(path: str, harness: str = "pi") -> Session | None:
     if harness == "claude":
         return parse_claude_session(path)
     return parse_pi_session(path)
+
+
+class TitleError(Exception):
+    """A rename refused: no title, an unknown harness, or no readable file."""
+
+
+def write_title(path: str, harness: str, title: str) -> str:
+    """Append the harness's native title line to a transcript; return the title.
+
+    The line shape is data (`core.HARNESS[harness]["title"]`), so one writer
+    serves every harness. A title is metadata, not a message: a live or
+    mid-turn session may be renamed. The file keeps one line per entry, so a
+    leading newline is added only when the transcript does not end with one.
+    """
+    spec = HARNESS.get(harness, {}).get("title")
+    if not spec:
+        raise TitleError(f"unknown harness: {harness}")
+    title = clean_name(title, "a session title", TitleError)
+    try:
+        with open(path, "rb") as f:
+            size = f.seek(0, os.SEEK_END)
+            if size:
+                f.seek(-1, os.SEEK_END)
+                last = f.read(1)
+    except OSError as e:
+        raise TitleError(
+            f"cannot read the session transcript: {e.strerror or e}"
+        ) from e
+    prefix = "\n" if size and last != b"\n" else ""
+    line = json.dumps({"type": spec["type"], spec["field"]: title},
+                      ensure_ascii=False)
+    try:
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(prefix + line + "\n")
+    except OSError as e:
+        raise TitleError(
+            f"cannot write the session title: {e.strerror or e}"
+        ) from e
+    return title

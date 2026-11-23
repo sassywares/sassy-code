@@ -478,6 +478,37 @@ def group_collapsed(g: Group, collapsed: set[str], flt: str) -> bool:
     return g.cwd in collapsed and not flt
 
 
+def row_index(rows, key) -> int | None:
+    """Index of the drawn row matching *key*, or None when it is not drawn."""
+    for i, item in enumerate(rows):
+        if row_key(item) == key:
+            return i
+    return None
+
+
+def neighbour_after_delete(rows, item) -> tuple:
+    """The key to select once *item*'s row is removed from *rows*.
+
+    The row below takes its place when it is still in the same project,
+    otherwise the row above; a project left with nothing selects its heading.
+    Only rows actually drawn are considered, so a filter or a tier is honored.
+    A tier row (`more`, `goal_more`, `slice_more`) is skipped: deleting a
+    session lowers the hidden count, so that row may not be drawn next time.
+    """
+    cwd = item[1].cwd
+    index = row_index(rows, row_key(item))
+    if index is None:
+        return ("group", cwd)
+    for i in (index + 1, index - 1):
+        if (
+            0 <= i < len(rows)
+            and rows[i][1].cwd == cwd
+            and rows[i][0] not in ("more", "goal_more", "slice_more")
+        ):
+            return row_key(rows[i])
+    return ("group", cwd)
+
+
 def row_key(item):
     """Stable identity for a row, so selection survives re-sorting."""
     kind, g, s = item

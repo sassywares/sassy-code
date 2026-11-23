@@ -64,9 +64,7 @@ def _read_state() -> str:
 
 def _write_state(session_id: str) -> None:
     try:
-        ensure_state_dir()
-        with open(state_path(CURRENT_STATE), "w") as f:
-            f.write(session_id)
+        write_current(session_id)
     except OSError:
         pass
 
@@ -83,10 +81,15 @@ class SessionError(Exception):
     """A session-state action refused; the message is shown in the footer."""
 
 
+class TrashError(Exception):
+    """The trash index refused a read or edit; the message goes in the footer."""
+
+
 GOALS_UNREADABLE = "goals.json is unreadable: goals hidden, edits refused"
 SESSIONS_UNREADABLE = (
     "sessions.json is unreadable: done marks hidden, edits refused"
 )
+TRASH_UNREADABLE = "trash is unreadable: entries hidden, edits refused"
 
 
 def goal_from_record(r: dict) -> Goal:
@@ -106,7 +109,7 @@ def goal_from_record(r: dict) -> Goal:
 class Store:
     """One JSON state file: its shape, its error class and its cache slot.
 
-    Both stores read, cache, guard and write through the same helpers; only
+    Every store reads, caches, guards and writes through the same helpers; only
     the file name, validator, error message and payload shape differ.
     """
 
@@ -125,6 +128,17 @@ class Store:
 # (stamp, converted payload, unreadable) of the last file read, per store.
 _sessions_cache: tuple | None = None
 _goals_cache: tuple | None = None
+_trash_cache: tuple | None = None
+
+
+def _valid_done_record(record) -> bool:
+    """A done mark's shape: a bool flag and an optional epoch timestamp."""
+    if not isinstance(record, dict):
+        return False
+    if not isinstance(record.get("done", False), bool):
+        return False
+    done_at = record.get("done_at")
+    return done_at is None or isinstance(done_at, (int, float))
 
 
 def _valid_sessions(data) -> bool:
@@ -134,12 +148,39 @@ def _valid_sessions(data) -> bool:
     if not isinstance(records, dict):
         return False
     for sid, record in records.items():
-        if not isinstance(sid, str) or not isinstance(record, dict):
+        if not isinstance(sid, str) or not _valid_done_record(record):
             return False
-        if not isinstance(record.get("done", False), bool):
+    return True
+
+
+def _valid_trash(data) -> bool:
+    if not isinstance(data, dict) or data.get("version") != 1:
+        return False
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return False
+    for entry in entries:
+        if not isinstance(entry, dict):
             return False
-        done_at = record.get("done_at")
-        if done_at is not None and not isinstance(done_at, (int, float)):
+        if not isinstance(entry.get("session_id"), str):
+            return False
+        if not isinstance(entry.get("harness"), str):
+            return False
+        if not isinstance(entry.get("title"), str):
+            return False
+        for field in ("original_path", "trashed_path", "cwd"):
+            if not isinstance(entry.get(field), str):
+                return False
+        goal_id = entry.get("goal_id", "")
+        if not isinstance(goal_id, str):
+            return False
+        if not isinstance(entry.get("deleted_at"), (int, float)):
+            return False
+        done = entry.get("done")
+        if done is not None and not _valid_done_record(done):
+            return False
+        loose = entry.get("loose", False)
+        if not isinstance(loose, bool):
             return False
     return True
 
@@ -221,12 +262,25 @@ GOALS_STORE = Store(
     save_error="could not save goal",
     valid=_valid_goals,
     convert=_goal_records,
-    empty=GoalIndex,
+    empty=dict,
+)
+
+TRASH_STORE = Store(
+    name="trash",
+    filename=os.path.join("trash", "index.json"),
+    root="entries",
+    cache_var="_trash_cache",
+    error=TrashError,
+    unreadable=TRASH_UNREADABLE,
+    save_error="could not save trash",
+    valid=_valid_trash,
+    convert=lambda data: data["entries"],
+    empty=list,
 )
 
 
 def _empty_store(store: Store) -> dict:
-    return {"version": 1, store.root: {}}
+    return {"version": 1, store.root: store.empty()}
 
 
 def read_store(store: Store) -> dict:
@@ -256,7 +310,7 @@ def load_store(store: Store) -> tuple[Any, bool]:
     try:
         value, unreadable = store.convert(read_store(store)), False
     except store.error:
-        value, unreadable = store.empty(), True
+        value, unreadable = store.convert(_empty_store(store)), True
     globals()[store.cache_var] = (stamp, value, unreadable)
     return value, unreadable
 
@@ -264,6 +318,8 @@ def load_store(store: Store) -> tuple[Any, bool]:
 def write_store_atomic(store: Store, data: dict) -> None:
     """Write a store file through a temp file in the state dir, then rename."""
     ensure_state_dir()
+    target = state_path(store.filename)
+    os.makedirs(os.path.dirname(target) or STATE_DIR, exist_ok=True)
     fd, tmp = tempfile.mkstemp(
         dir=STATE_DIR, prefix=f".{store.name}-", suffix=".tmp"
     )
@@ -271,7 +327,7 @@ def write_store_atomic(store: Store, data: dict) -> None:
         with os.fdopen(fd, "w") as f:
             json.dump(data, f, indent=2)
             f.write("\n")
-        os.replace(tmp, state_path(store.filename))
+        os.replace(tmp, target)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -367,3 +423,83 @@ def toggle_session_done(s: Session) -> bool:
         return True
 
     return mutate_sessions(apply)
+
+
+def read_trash_file() -> dict:
+    """Parse the trash index. Missing means empty; unreadable raises."""
+    return read_store(TRASH_STORE)
+
+
+def load_trash() -> tuple[list[dict], bool]:
+    """Trash entries plus an unreadable flag, cached by file stamp."""
+    return load_store(TRASH_STORE)
+
+
+def mutate_trash(apply):
+    """Re-read the trash index, let *apply* edit it, write atomically."""
+    return mutate_store(TRASH_STORE, apply)
+
+
+def trash_guard() -> str:
+    """A footer warning when the trash index is unreadable, else ""."""
+    return store_guard(TRASH_STORE)
+
+
+def write_current(session_id: str) -> None:
+    """Write `current` strictly: an OSError reaches the caller for rollback."""
+    ensure_state_dir()
+    with open(state_path(CURRENT_STATE), "w") as f:
+        f.write(session_id)
+
+
+def restore_session_done(session_id: str, record: dict | None):
+    """Replace a session's done record with *record*; None removes it."""
+    def apply(data: dict) -> object:
+        records = data["sessions"]
+        if record is None:
+            if session_id not in records:
+                return NO_WRITE
+            records.pop(session_id)
+            return True
+        if records.get(session_id) == record:
+            return NO_WRITE
+        records[session_id] = record
+        return True
+
+    return mutate_sessions(apply)
+
+
+def clear_session_dones(session_ids) -> dict:
+    """Remove several done records in one write; returns what was removed.
+
+    The returned snapshot is what `restore_session_dones` puts back when a
+    multi-session delete has to roll back.
+    """
+    ids = list(dict.fromkeys(session_ids))
+
+    def apply(data: dict) -> object:
+        records = data["sessions"]
+        removed = {
+            sid: records.pop(sid) for sid in ids if sid in records
+        }
+        return removed if removed else NO_WRITE
+
+    result = mutate_sessions(apply)
+    return {} if result is NO_WRITE else result
+
+
+def restore_session_dones(records: dict) -> None:
+    """Put a `clear_session_dones` snapshot back in one write."""
+    if not records:
+        return
+
+    def apply(data: dict) -> object:
+        current = data["sessions"]
+        changed = False
+        for session_id, record in records.items():
+            if current.get(session_id) != record:
+                current[session_id] = record
+                changed = True
+        return True if changed else NO_WRITE
+
+    mutate_sessions(apply)

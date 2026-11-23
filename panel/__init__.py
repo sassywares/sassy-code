@@ -18,6 +18,7 @@ from __future__ import annotations
 # imports (`panel.curses`, `panel.os`, `panel.time`, ...), which tests read.
 # An `__all__` in any owner module would remove that pass-through.
 from panel.core import *  # noqa: F401,F403
+from panel.keymap import *  # noqa: F401,F403
 from panel.parsers import *  # noqa: F401,F403
 from panel.procs import *  # noqa: F401,F403
 from panel.tmuxctl import *  # noqa: F401,F403
@@ -25,10 +26,12 @@ from panel.panes import *  # noqa: F401,F403
 from panel.state import *  # noqa: F401,F403
 from panel.goals import *  # noqa: F401,F403
 from panel.status import *  # noqa: F401,F403
+from panel.trash import *  # noqa: F401,F403
 from panel.rows import *  # noqa: F401,F403
 from panel.view import *  # noqa: F401,F403
 from panel.mouse import *  # noqa: F401,F403
 from panel.boxes import *  # noqa: F401,F403
+from panel.help import *  # noqa: F401,F403
 from panel.actions import *  # noqa: F401,F403
 
 

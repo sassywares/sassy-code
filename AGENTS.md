@@ -9,7 +9,7 @@ in [`docs/architecture.md`](docs/architecture.md); the words are in
 | Path | Role |
 |---|---|
 | `main` | Bash launcher. Builds the `sassy-code` session and layout, starts the panel with the viewer pane id, owns the tmux key bindings. |
-| `panel/` | The stdlib-only curses package. `__init__.py` is the read-only facade; `__main__.py` is the `-m` shim; `main.py` holds `App` and `main()`. |
+| `panel/` | The stdlib-only curses package. `__init__.py` is the read-only facade; `__main__.py` is the `-m` shim; `main.py` holds `App` and `main()`; `keymap.py` is the one binding table and `help.py` the `?` menu. |
 | `docs/architecture.md` | The one system picture: how it works. |
 | `docs/solutions/` | Durable learnings and past bugs. Read the relevant entry before re-investigating a problem. |
 | `CONCEPTS.md` | Vocabulary. Read before adding or renaming a user-facing term. |
@@ -70,6 +70,13 @@ The module map and import graph are in
   `python3 -m panel --new-session --pane #{pane_id}`, which finds the
   `@sassy_panel` pane and sends its no-picker `N` key; never reimplement spawn,
   swap or state handling in a binding, and never overwrite a user's key.
+- **A binding is a keymap row.** Footers, the `?` menu and the README mirror
+  `panel/keymap.py`; change the table, the renderers (`view.footer_items`,
+  `help`) and the README `## Keys` table in one commit. Entity footers carry
+  only the highlighted row's actions, never a global hint. A key the menu or
+  the table hides keeps working and keeps its row (`also` for a hidden alias,
+  `menu=False`/`listed=False` for a hidden row); no binding exists only in the
+  dispatcher.
 - **Background work is lazy.** Only sessions opened through the panel get live
   panes; a working hidden pane survives, a completed one is reaped after the
   refresh grace, and a leftover shell with no agent descendant is removed.
@@ -97,9 +104,9 @@ The module map and import graph are in
 - **Harness marks are quiet.** Every session row is `status glyph title age`
   (`π` Pi, `✳` Claude Code); no second badge or column.
 - **Harness behaviour is data, not branches.** A new harness is one
-  `core.HARNESS` entry (label and glyph), one parser in `parsers`, and its
-  resume/new commands in the `panes` helpers; never scatter `if harness == …`
-  through the panel.
+  `core.HARNESS` entry (label, glyph, and the native title line type and field
+  a rename writes), one parser in `parsers`, and its resume/new commands in
+  the `panes` helpers; never scatter `if harness == …` through the panel.
 - **Pi-only actions stay Pi-only.** `r` (`/reload`) targets managed Pi panes
   only; Claude Code has no equivalent. Claude transcripts have no session-level
   parent link, so in-process switches are a Pi concept.
@@ -154,6 +161,7 @@ README is a review finding.
 
 | Change | Document |
 |---|---|
+| A keybinding, mouse gesture, keys-menu row or footer hint | `panel/keymap.py`, its renderer (`view.footer_items`, `help`) and `README.md` § Keys in one commit |
 | A key, mouse gesture, prompt, picker, `:` command, env var, dependency, layout, goal/limit/glyph/status mark or session store | `README.md` |
 | The README screenshot, its demo fixture or renderer | `.agents/skills/sassy-code-shot/` and [`docs/solutions/tooling/readme-screenshot.md`](docs/solutions/tooling/readme-screenshot.md) |
 | Process model, module map, data flow, reaping, state files | `docs/architecture.md` |

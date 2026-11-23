@@ -5,6 +5,7 @@ from __future__ import annotations
 import curses
 import os
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from tests.goal_case import GoalStoreCase, panel, session
@@ -46,7 +47,7 @@ class RenameTests(LifecycleCase):
     def test_prefill_and_footer(self):
         groups, (a, b) = self.make()
         self.assertEqual(
-            panel.rename_prefill(self.row(groups, a)), ("goal:rename A", "")
+            panel.rename_prefill(self.row(groups, a)), ("goal:rename ", "")
         )
         items = panel.footer_items(self.row(groups, a))
         self.assertEqual(
@@ -54,12 +55,9 @@ class RenameTests(LifecycleCase):
             ["⏎ toggle  n new  R rename  x done  D delete"],
         )
 
-    def test_prefill_refused_off_goal_rows(self):
-        groups, _ = self.make(loose_ts=(5.0,))
-        text, msg = panel.rename_prefill(("session", groups[0], groups[0].sessions[0]))
-        self.assertEqual(text, "")
-        self.assertIn("highlight a goal", msg)
-        self.assertEqual(panel.rename_prefill(None)[0], "")
+    def test_refused_without_a_row(self):
+        self.make(loose_ts=(5.0,))
+        self.assertEqual(panel.rename_prefill(None), ("", panel.NO_GOAL_ROW))
 
     def test_apply_renames_and_keeps_cursor_on_goal(self):
         groups, (a, b) = self.make()
@@ -87,6 +85,7 @@ class RenameTests(LifecycleCase):
             ("goal:rename x", ("session", groups[0], groups[0].sessions[0]),
              "highlight a goal"),
             ("goal:rename x", None, "highlight a goal"),
+            ("goal:rename", self.row(groups, a), "needs a name"),
             ("goal:rename   ", self.row(groups, a), "needs a name"),
             ("goal:rename b", self.row(groups, a), "already exists"),
         ):
@@ -194,22 +193,36 @@ class DeleteTests(LifecycleCase):
     def test_prompt_text(self):
         groups, (a, _) = self.make()
         self.assertEqual(
-            panel.delete_prompt(self.row(groups, a))[0], " Delete goal 'A'? y/n "
+            panel.delete_prompt(self.row(groups, a))[0],
+            " Delete goal 'A'? y/n ",
         )
         self.assertEqual(panel.delete_prompt(None)[0], "")
 
-    def test_delete_flattens_sessions_and_selects_newest_member(self):
-        groups, (a, b) = self.make(members={0: [("a1", 10.0), ("a2", 20.0)]})
+    def test_prompt_counts_the_whole_subtree(self):
+        groups, (a, b) = self.make(
+            members={0: [("a1", 10.0), ("a2", 20.0)], 1: [("b1", 30.0)]}
+        )
+        self.assertEqual(
+            panel.delete_prompt(self.row(groups, a))[0],
+            " Delete goal 'A' and 2 sessions? y/n ",
+        )
+        self.assertEqual(
+            panel.delete_prompt(self.row(groups, b))[0],
+            " Delete goal 'B' and 1 session? y/n ",
+        )
+
+    def test_unreadable_member_refuses_the_whole_delete(self):
+        groups, (a, b) = self.make(
+            members={0: [("a1", 10.0)], 1: [("b1", 20.0)]}
+        )
+        before = self.file.read_text()
         msg, key = panel.delete_goal_row(groups, self.row(groups, a))
-        self.assertIn("deleted", msg)
-        self.assertEqual(key, ("session", "a2", "/p"))
-        self.assertEqual([g.name for g in groups[0].goals], ["B"])
-        kinds = [(r[0], getattr(r[2], "id", None)) for r in panel.rows_for(groups, "")]
-        self.assertIn(("session", "a1"), kinds)
-        self.assertIn(("session", "a2"), kinds)
+        self.assertIn("cannot delete goal 'A'", msg)
+        self.assertIn("'a1'", msg)
+        self.assertIn("transcript is unreadable", msg)
+        self.assertIsNone(key)
+        self.assertEqual(self.file.read_text(), before)
         self.assertEqual(len(groups[0].sessions), 2)
-        rows = list(panel.rows_for(groups, ""))
-        self.assertEqual(rows[panel.cursor_for_key(rows, key)][2].id, "a2")
 
     def test_empty_goal_selects_project_heading(self):
         groups, (a, _) = self.make()
@@ -223,6 +236,20 @@ class DeleteTests(LifecycleCase):
         msg, key = panel.delete_goal_row(groups, row)
         self.assertIn("no longer exists", msg)
         self.assertIsNone(key)
+
+    def test_delete_prompt_refuses_when_the_sessions_store_is_corrupt(self):
+        groups, (a, _) = self.make()
+        sessions = Path(panel.state.STATE_DIR) / "sessions.json"
+        sessions.parent.mkdir(parents=True, exist_ok=True)
+        sessions.write_text("broken")
+        panel.state._sessions_cache = None
+        self.assertEqual(
+            panel.delete_prompt(self.row(groups, a))[0], ""
+        )
+        self.assertIn(
+            "sessions.json is unreadable",
+            panel.delete_prompt(self.row(groups, a))[1],
+        )
 
 
 class LoopCase(LifecycleCase):
@@ -932,15 +959,28 @@ class SliceLifecycleTests(GoalStoreCase):
         return [(k, getattr(x, "id", None))
                 for k, _, x in panel.rows_for(self.groups, "")]
 
-    def test_rename_prefill_uses_slice_command(self):
+    def test_rename_prefill_leaves_the_name_blank(self):
         self.assertEqual(
             panel.rename_prefill(self.row(self.slice.id)),
-            ("slice:rename Slice", ""),
+            ("slice:rename ", ""),
         )
         self.assertEqual(
             panel.rename_prefill(self.row(self.goal.id)),
-            ("goal:rename Goal", ""),
+            ("goal:rename ", ""),
         )
+
+    def test_rename_refuses_an_empty_argument(self):
+        before = self.file.read_text()
+        for typed, row in (
+            ("goal:rename", self.row(self.goal.id)),
+            ("goal:rename   ", self.row(self.goal.id)),
+            ("slice:rename", self.row(self.slice.id)),
+            ("slice:rename   ", self.row(self.slice.id)),
+        ):
+            message, key = panel.apply_command(typed, row, self.groups, set())
+            self.assertIn("needs a name", message)
+            self.assertIsNone(key)
+        self.assertEqual(self.file.read_text(), before)
 
     def test_apply_slice_rename_and_refuse_duplicate_sibling(self):
         message, key = panel.apply_command(
@@ -1047,31 +1087,36 @@ class SliceLifecycleTests(GoalStoreCase):
                         after.index(("slice", self.slice.id)))
         self.assertTrue(self.groups[0].goals[1].done)
 
-    def test_delete_slice_flattens_only_its_sessions(self):
+    def test_delete_slice_prompt_counts_its_sessions(self):
         self.assertEqual(
             panel.delete_prompt(self.row(self.slice.id))[0],
-            " Delete slice 'Slice'? y/n ",
+            " Delete slice 'Slice' and 2 sessions? y/n ",
         )
+        self.assertEqual(
+            panel.delete_prompt(self.row(self.goal.id))[0],
+            " Delete goal 'Goal' and 3 sessions? y/n ",
+        )
+
+    def test_delete_slice_refuses_when_a_member_is_unreadable(self):
+        before = self.file.read_text()
         message, key = panel.delete_goal_row(
             self.groups, self.row(self.slice.id)
         )
-        self.assertIn("deleted slice", message)
-        self.assertEqual(key, ("session", "a", "/p"))
-        self.assertEqual([x.name for x in self.groups[0].goals], ["Goal"])
-        member_ids = panel.goal_member_ids(self.groups[0])
-        self.assertIn("d", member_ids)
-        self.assertNotIn("a", member_ids)
-        self.assertNotIn("b", member_ids)
-        self.assertEqual(len(self.groups[0].sessions), 3)
+        self.assertIn("cannot delete slice 'Slice'", message)
+        self.assertIsNone(key)
+        self.assertEqual(self.file.read_text(), before)
+        self.assertEqual([x.name for x in self.groups[0].goals],
+                         ["Goal", "Slice"])
 
-    def test_delete_goal_cascades_to_slices(self):
+    def test_delete_goal_refuses_when_a_member_is_unreadable(self):
+        before = self.file.read_text()
         message, key = panel.delete_goal_row(
             self.groups, self.row(self.goal.id)
         )
-        self.assertIn("deleted goal", message)
-        self.assertEqual(key, ("session", "a", "/p"))
-        self.assertEqual(self.groups[0].goals, [])
-        self.assertEqual(panel.goal_member_ids(self.groups[0]), set())
+        self.assertIn("cannot delete goal 'Goal'", message)
+        self.assertIsNone(key)
+        self.assertEqual(self.file.read_text(), before)
+        self.assertEqual(len(self.groups[0].goals), 2)
         self.assertEqual(len(self.groups[0].sessions), 3)
 
     def test_corrupt_store_refuses_slice_actions(self):

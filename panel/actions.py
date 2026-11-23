@@ -13,7 +13,9 @@ import uuid
 from dataclasses import replace
 
 from panel import core, goals as _goals, panes as _panes, procs as _procs
+from panel import parsers as _parsers, rows as _rows
 from panel import state as _state, status as _status, tmuxctl as _tmux
+from panel import trash as _trash
 from panel.core import Group, Goal, Session
 
 
@@ -40,12 +42,14 @@ def run_command(
     current: Goal | None = None,
     current_kind: str = "goal",
     slice_parent: str = "",
-) -> tuple[str, Goal | None]:
+    session: Session | None = None,
+) -> tuple[str, Goal | Session | None]:
     """Run a `:` command line; returns (footer message, node to select).
 
     *current* is the highlighted goal or slice; *current_kind* says which, so
     `goal:rename` and `slice:rename` only touch the matching node (A5).
-    *slice_parent* lets `:slice:create` target the container of a session row.
+    *slice_parent* lets `:slice:create` target the container of a session row;
+    *session* is the highlighted session for `session:rename`.
     """
     parts = text.strip().lstrip(":").split(None, 1)
     if not parts:
@@ -55,6 +59,14 @@ def run_command(
     def fail(e: Exception) -> tuple[str, None]:
         return _state._store_error_message(_state.GOALS_STORE, e), None
 
+    if command == "session:rename":
+        if session is None:
+            return "highlight a session to rename it", None
+        try:
+            name = _parsers.write_title(session.path, session.harness, arg)
+        except _parsers.TitleError as e:
+            return str(e), None
+        return f"renamed session to '{name}'", session
     if command in ("goal:rename", "slice:rename"):
         noun = command.split(":", 1)[0]
         if cwd is None or current is None or current_kind != noun:
@@ -324,10 +336,14 @@ def apply_command(
     cwd = row[1].cwd if row else None
     current_kind = row[0] if row and row[0] in ("goal", "slice") else "goal"
     current = row[2] if row and row[0] in ("goal", "slice") else None
+    session = row[2] if row and row[0] == "session" else None
     text, node = run_command(
-        typed, cwd, current, current_kind, slice_parent_for_row(row)
+        typed, cwd, current, current_kind, slice_parent_for_row(row), session
     )
     message = f" {text} " if text else ""
+    if isinstance(node, Session):
+        # A renamed transcript keeps its row; nothing in goals.json moved.
+        return message, ("session", node.id, node.cwd)
     if node is None:
         return message, None
     collapsed.discard(cwd)
@@ -361,12 +377,17 @@ def row_noun(row: tuple) -> str:
 
 
 def rename_prefill(row: tuple | None) -> tuple[str, str]:
-    """(`:` line text, footer message) for `R`; empty text means refused."""
+    """(`:` line text, footer message) for `R`; empty text means refused.
+
+    No rename carries the current name over: a session, goal or slice row all
+    open on an empty argument, so the user types a fresh one (D26).
+    """
+    if row and row[0] == "session":
+        return "session:rename ", ""
     refusal = _goal_row_refusal(row)
     if refusal:
         return "", refusal
-    noun = row_noun(row)
-    return f"{noun}:rename {row[2].name}", ""
+    return f"{row_noun(row)}:rename ", ""
 
 
 def done_goal(groups: list[Group], row: tuple | None) -> tuple[str, tuple | None]:
@@ -444,39 +465,101 @@ def move_to_new_goal(
 
 
 def delete_prompt(row: tuple | None) -> tuple[str, str]:
-    """(confirm text, refusal message) for `D`; empty confirm means refused."""
+    """(confirm text, refusal message) for `D`; empty confirm means refused.
+
+    A cascade prompt names how many sessions the goal or slice takes with it;
+    at zero the clause is dropped. An unreadable store refuses before the
+    prompt, because the transaction could not preserve the filing or marks.
+    """
+    if row and row[0] == "session":
+        refusal = (
+            goals_guard()
+            or _state.sessions_guard()
+            or _state.trash_guard()
+        )
+        if refusal:
+            return "", refusal
+        return f" Delete session '{row[2].title}'? y/n ", ""
     refusal = _goal_row_refusal(row)
     if refusal:
         return "", refusal
+    unreadable = _state.sessions_guard() or _state.trash_guard()
+    if unreadable:
+        return "", unreadable
+    _, g, goal = row
+    members = _goals.goal_subtree_members(g, goal)
     noun = row_noun(row)
-    return f" Delete {noun} '{row[2].name}'? y/n ", ""
+    if members:
+        count = len(members)
+        plural = "" if count == 1 else "s"
+        return (
+            f" Delete {noun} '{goal.name}' and {count} session{plural}? y/n ",
+            "",
+        )
+    return f" Delete {noun} '{goal.name}'? y/n ", ""
+
+
+def delete_session_row(
+    groups: list[Group],
+    row: tuple | None,
+    presented: str = "",
+    reap_state: dict[str, float] | None = None,
+    viewer: str = "",
+    rows: list | None = None,
+) -> tuple[str, tuple | None]:
+    """`D` on a session: preflight, stop, move to trash; (message, key).
+
+    The preflight lives in `panel.trash`, so the same rule protects the P2
+    cascade. A refusal names the reason and moves nothing. The follow-up key
+    is the neighbour among the rows as drawn, so a filter is honored.
+    """
+    if not row or row[0] != "session":
+        return NO_SESSION_ROW, None
+    _, g, s = row
+    ok, text = _trash.delete_session(
+        s, g, presented=presented, viewer=viewer, reap_state=reap_state
+    )
+    if not ok:
+        return text, None
+    _goals.attach_goals(groups)
+    return text, _rows.neighbour_after_delete(rows or [], row)
 
 
 def delete_goal_row(
-    groups: list[Group], row: tuple
+    groups: list[Group],
+    row: tuple,
+    presented: str = "",
+    reap_state: dict[str, float] | None = None,
+    viewer: str = "",
+    panes: list | None = None,
+    procs: list | None = None,
 ) -> tuple[str, tuple | None]:
-    """Delete the highlighted goal or slice after a `y` (D16).
+    """Delete the highlighted goal or slice and its whole subtree (P2).
 
-    A goal takes its slices with it and every session in the subtree becomes
-    loose; a slice flattens only its own sessions. Selects the newest former
-    member, else the parent goal, else the project heading.
+    Every member session goes to the trash in one transaction and the
+    container records are removed after; a refused or failed transaction
+    leaves the list unchanged. Selects the parent goal for a slice, else the
+    project heading, because the members are gone.
     """
     _, g, goal = row
-    members = _goals.goal_subtree_members(g, goal)
-    parent = goal.parent if row[0] == "slice" else ""
-    try:
-        _goals.delete_goal(g.cwd, goal.id)
-    except (_state.GoalError, OSError) as e:
-        return f" {_state._store_error_message(_state.GOALS_STORE, e)} ", None
+    parent_id = goal.parent if row[0] == "slice" else ""
+    ok, text = _trash.delete_subtree(
+        g, goal, presented=presented, viewer=viewer, reap_state=reap_state,
+        panes=panes, procs=procs,
+    )
+    if not ok:
+        return text, None
     _goals.attach_goals(groups)
-    if members:
-        key = ("session", members[0].id, g.cwd)
-    elif parent:
-        key = ("goal", parent, g.cwd)
+    parent = (
+        next((x for x in g.goals if x.id == parent_id), None)
+        if parent_id else None
+    )
+    if parent is not None:
+        kind = "slice" if _goals.goal_is_slice(g, parent) else "goal"
+        key = (kind, parent.id, g.cwd)
     else:
         key = ("group", g.cwd)
-    noun = row_noun(row)
-    return f" deleted {noun} '{goal.name}' ", key
+    return text, key
 
 
 def toggle_goal(groups: list[Group], g: Group, goal: Goal, value: bool) -> str:

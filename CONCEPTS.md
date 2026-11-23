@@ -23,10 +23,20 @@ identity, not **liveness** — the tag outlives the agent. *Avoid: tagged pane.*
 **Panel tag** — `@sassy_panel`, which the control panel puts on its own pane so
 a launcher shortcut can find it without trusting pane positions.
 
-**Footer** — the panel's own bottom line (hints, prompts, refusals). Never the
+**Footer** — the panel's own bottom line (hints, prompts, refusals). An entity
+footer shows only the highlighted **project**, **session** or goal/slice
+actions, plus `⏎ more`/`⏎ less` on a tier row; global, tmux and mouse bindings
+live in the **keys menu**, and the box keys stay in the README table. Never the
 **status line**: the bar tmux draws for the session (at the bottom by default),
 of which `status-left` is only the left field. The launcher pins nothing there
 except the length of `status-left`, so the session name is not clipped.
+
+**Keys menu** — the `?` box listing the global, tmux and mouse bindings,
+rendered from `panel/keymap.py` in Global, Tmux and Mouse sections; a long
+action wraps instead of clipping. It is a supplement, not a duplicate: entity
+actions stay in their footers, and the box keys stay in the README table. A
+hidden alias (`j`/`k`, `g`/`G`/`Home`/`End`, `h`/`l`/`←`/`→`) still works
+without being listed. *Avoid: help screen, cheatsheet, shortcuts.*
 
 **Project group** — the sessions sharing one working directory, rendered as one
 collapsible heading. Its **project name** is `root` for home, else the folder's
@@ -96,9 +106,9 @@ never know about goals. *Avoid: folder, epic, workspace.*
 
 **Slice** — a named child of a **goal**, holding sessions directly, with its own
 limit, collapse state and done mark; it cannot contain another slice. Names are
-unique among siblings under the same parent only. Deleting a slice flattens its
-sessions loose; deleting its goal removes the slice too. *Avoid: subgoal, phase,
-step, child goal.*
+unique among siblings under the same parent only. Deleting a slice trashes its
+sessions and removes only the slice; deleting its goal removes the slice too and
+trashes the whole subtree. *Avoid: subgoal, phase, step, child goal.*
 
 **Collapse** — hide a group's or container's children but keep its row visible;
 the inverse is **expand**. *Avoid: fold/unfold, close/open.*
@@ -108,6 +118,25 @@ active siblings, and for containers collapsed. A done session is dimmed and
 stored by id in `sessions.json` (never in the transcript). New activity, another
 `x`, or starting a session in a done container revives it. *Avoid: archived,
 hidden, deleted.*
+
+**Delete** — `D` on a session stops its managed agent, moves the transcript to
+the **trash**, and removes its done mark and goal membership. `D` on a goal or
+slice is a **cascade**: every explicit and inherited session in the subtree goes
+to the trash and then the containers are removed, all-or-nothing, so one busy,
+external or unknown member refuses the whole delete. A session delete refuses the
+same way, and the stop is `SIGTERM` only, never `SIGKILL`. *Avoid: remove,
+destroy, archive.*
+
+**Trash** — the recoverable store behind `t`: `trash/index.json` plus
+`trash/files/`, holding the original path, title, harness, project, goal, done
+mark and deletion time. The picker groups entries by project under a project
+header, with a divider rule between groups (never above the first), newest
+first inside each group, with aligned title, harness and age columns and a
+rule-separated action line for restore and purge. **Restore** moves the transcript back and
+reapplies those records; **purge** drops the entry and transcript for good;
+entries older than seven days are purged on start. A corrupt index hides the
+entries and refuses edits, like the other state stores. *Avoid: recycle bin,
+graveyard, archive.*
 
 **Attention** — an in-memory per-session mark that a hidden session finished its
 turn. It keeps the row on `needs input` after the pane is reaped, clears when
@@ -129,9 +158,10 @@ transfer.*
 press-and-release **moves**. Gestures: [`README.md`](README.md#mouse).
 
 **Command line** — the `:` prompt. The first token is the command
-(`goal:create`, `goal:rename`, `slice:create`, `slice:rename`) and the rest its
-argument, so a name may contain `:`. Unlike `/`, which only filters, it changes
-state; refusals appear in the footer. *Avoid: palette, ex mode.*
+(`goal:create`, `goal:rename`, `slice:create`, `slice:rename`,
+`session:rename`) and the rest its argument, so a name may contain `:`. Unlike
+`/`, which only filters, it changes state; refusals appear in the footer.
+*Avoid: palette, ex mode.*
 
 ## The repository
 

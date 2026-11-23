@@ -12,52 +12,14 @@ import curses
 import re
 import zlib
 
-from panel import core, goals as _goals, panes as _panes, rows as _rows
+from panel import core, goals as _goals, keymap as _keymap
+from panel import panes as _panes, rows as _rows
 from panel.core import Goal, Group, PaneInfo, Session
 
 
-FOOTER_ITEMS = (
-    "↑/↓ move",
-    "⏎ present",
-    "n new",
-    "/ filter",
-    ": cmd",
-    "r reload",
-    "q quit",
-)
-
-
-GOAL_FOOTER_ITEMS = (
-    "⏎ toggle",
-    "n new",
-    "R rename",
-    "x done",
-    "D delete",
-)
-
-
-SESSION_FOOTER_ITEMS = (
-    *FOOTER_ITEMS[:-1],
-    "m move",
-    "x done",
-    FOOTER_ITEMS[-1],
-)
-
-
 def footer_items(row: tuple | None) -> tuple[str, ...]:
-    """Footer hints for the highlighted row's kind."""
-    kind = row[0] if row else None
-    if kind in ("goal", "slice"):
-        items, done = GOAL_FOOTER_ITEMS, row[2].done
-    elif kind == "session":
-        items, done = SESSION_FOOTER_ITEMS, row[2].done
-    elif kind == "group":
-        return tuple("⏎ toggle" if i == "⏎ present" else i for i in FOOTER_ITEMS)
-    else:
-        return FOOTER_ITEMS
-    if not done:
-        return items
-    return tuple("x undo" if i == "x done" else i for i in items)
+    """The exact footer hints for the highlighted row's keymap scope (D14)."""
+    return _keymap.footer_items(row)
 
 
 def footer_lines(items, w: int) -> list[str]:

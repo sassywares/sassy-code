@@ -195,9 +195,9 @@ def cursor_for_key(rows, key) -> int:
     """Index of the row matching *key*, falling back within its group."""
     if key is None:
         return 0
-    for i, item in enumerate(rows):
-        if _rows.row_key(item) == key:
-            return i
+    index = _rows.row_index(rows, key)
+    if index is not None:
+        return index
     if key[0] not in (
         "session", "more", "goal", "slice", "goal_more", "slice_more"
     ):

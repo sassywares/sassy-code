@@ -81,17 +81,24 @@ class ReloadTests(unittest.TestCase):
 
 
 class FooterTests(unittest.TestCase):
+    def items(self):
+        s = panel.Session(
+            path="", id="s", cwd="/p", created=0.0, last_ts=0.0
+        )
+        return panel.footer_items(("session", None, s))
+
     def test_narrow_footer_wraps_without_dropping_bindings(self):
-        lines = panel.footer_lines(panel.view.FOOTER_ITEMS, 26)
+        items = self.items()
+        lines = panel.footer_lines(items, 26)
         self.assertGreater(len(lines), 1)
         for line in lines:
             self.assertLessEqual(len(line), 25)
         rendered = "  ".join(lines)
-        for item in panel.view.FOOTER_ITEMS:
+        for item in items:
             self.assertIn(item, rendered)
 
     def test_wide_footer_is_one_line(self):
-        lines = panel.footer_lines(panel.view.FOOTER_ITEMS, 200)
+        lines = panel.footer_lines(self.items(), 200)
         self.assertEqual(len(lines), 1)
 
 

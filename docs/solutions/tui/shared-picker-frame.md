@@ -28,10 +28,17 @@ shared by both boxes:
 
 - `lines_for(state)` returns `(text, attribute[, kind])`. A `PICKER_DIVIDER`
   line is a real rule drawn edge to edge at the box origin; it is excluded from
-  the width calculation, never selected and never pickable.
+  the width calculation, never selected and never pickable. The same kind
+  separates sections inside a grouped list (the trash's project groups) and
+  draws the rule above a pinned footer; neither use is a selectable row.
 - `step(state, ch)` applies one key and returns `_PICKER_STAY` to loop or the
   result to return; Ctrl-C cancels whether curses delivers key 3 or raises
   `KeyboardInterrupt` (ISIG on), and the repaint in `finally` is contained too.
+- An optional `footer_for(state)` returns `(text, attribute)` lines pinned below
+  the scrolling items and above the bottom border, with a separator rule drawn
+  between the list and the hints. The rule and the hints are never pickable and
+  take their own rows out of the list's budget, so a box can show its own
+  actions without trusting the panel footer behind it.
 - If the box cannot be drawn — no lines, a terminal too small for a frame, or a
   `curses.error` from `newwin`/`addnstr`/`refresh` — return `fallback`/`None`
   without reading a key. A pick nobody saw must never be applied.
@@ -48,7 +55,8 @@ they do not draw.
 ## Applicability
 
 Use this when adding a third picker or prompt: write `lines_for` and `step`, and
-call `run_picker`; do not copy the frame loop. The column model applies to
+call `run_picker`; do not copy the frame loop. The trash picker is the worked
+example of a grouped, column-aligned list with a pinned action line. The column model applies to
 tree-shaped lists; a flat confirmation prompt can use `prompt_line` instead.
 `tests/test_moves.py` pins both bail-outs (no lines, `curses.error`, a 2×4
 terminal) and the exact rendered columns; `tests/test_mouse.py` covers click

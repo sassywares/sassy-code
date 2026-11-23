@@ -30,6 +30,7 @@ mark (`✗` > `●` > `◐`) after its count.
 
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Keys](#keys)
 - [Mouse](#mouse)
 - [Optional: add an alias](#optional-add-an-alias)
 - [How it works](#how-it-works)
@@ -87,27 +88,91 @@ If the file is not executable, run `chmod +x main` or `bash main`.
   directory itself; `CLAUDE_CONFIG_DIR` is the config directory, and the panel
   appends `projects` to it.
 - `SASSY_CODE_STATE_DIR` moves the panel's own state (goals, done marks, the
-  presented session) off `~/.sassywares/sassy-code`, and
+  presented session and the trash) off `~/.sassywares/sassy-code`, and
   `SASSY_CODE_PROCS_FIXTURE=<path>` replaces the live `ps` snapshot with a file
   in the same format. Together they let the README screenshot run a demo store
   in a temp directory: the first keeps it out of your state, the second is what
   makes `● in progress` show up without a real agent running.
 
-Keys in the left pane: `↑/↓` or `j/k` move, `g/G` jump to the top/bottom,
-`Enter` (or a double-click) presents a session and focuses the right pane, or
-collapses/expands a directory, goal or slice, or steps a `… N more` row forward
-and a `… show fewer` row back. `[`/`]` are one level per press in both
-directions; `←/→` and `h/l` are aliases. On a session row they act on its
-container, and while a filter is active neither key changes the stored tier.
+## Keys
+
+Every binding is one row of `panel/keymap.py`; the entity footers, the `?`
+keys menu and this table read the same rows. A footer shows only what the
+highlighted project, session, goal or slice can do, so no global hint leaks
+into it. `?` adds the global, tmux and mouse bindings that no footer carries. The
+box keys are in the table but not in the menu. On an empty list the footer
+reads `↑/↓ move  ? keys`; a done session, goal or slice shows `x undo`, and a
+fully shown `… show fewer` row reads `⏎ less`.
+
+Some aliases keep working without appearing in the table or the menu: `j`/`k`
+move the highlight, `g`/`G` (and `Home`/`End`) jump to the first or last row,
+and `h`/`l`/`←`/`→` hide or show a tier.
+
+`r` sends `/reload` to every managed pane still running Pi, whatever row is
+highlighted; Claude Code has no equivalent.
+
+| Scope | Keys | Action |
+|---|---|---|
+| List | ↑ ↓ | move the highlight |
+| List | [ ] | hide or show one tier, or collapse a container |
+| List | / | filter sessions, goals and slices |
+| List | : | open the command line |
+| List | r | reload every managed Pi session's skills; Claude Code has no equivalent |
+| List | q | detach the panel; sessions keep running |
+| List | Ctrl-C | detach the panel |
+| No row | ↑ ↓ | move the highlight |
+| No row | ? | open the keys menu |
+| Project | ⏎ | collapse or expand the project |
+| Project | n | start a session in the project |
+| Session | ⏎ | present the session |
+| Session | R | rename the session |
+| Session | m | move the session to a goal or slice |
+| Session | x | mark the session done, or undo it |
+| Session | D | delete the session to the trash |
+| Session | n | start a session in this session's project |
+| Goal/slice | ⏎ | collapse or expand the goal or slice |
+| Goal/slice | n | start a session in the goal or slice |
+| Goal/slice | R | rename the goal or slice |
+| Goal/slice | x | mark the goal or slice done, or undo it |
+| Goal/slice | D | delete the goal or slice and its sessions to the trash |
+| More/less | ⏎ | reveal the next tier, or hide one |
+| Trash | t | open the trash |
+| Delete prompt | y | confirm the delete; any other key cancels |
+| New box | ↑ ↓ | move between the Goal item and the harnesses |
+| New box | Tab | switch between the Goal item and the harnesses |
+| New box | 1–9 ⏎ | pick a harness or the Goal item |
+| New box | Esc q Ctrl-C | close the box |
+| Move box | ↑ ↓ | move the highlight |
+| Move box | 1–9 ⏎ | pick a target |
+| Move box | Esc q Ctrl-C | close the box |
+| Trash box | ↑ ↓ | move the highlight |
+| Trash box | / | filter by title, project or harness |
+| Trash entry | ⏎ | restore the selected session |
+| Trash entry | d y | purge the selected session after confirmation |
+| Trash box | Esc q Ctrl-C | close the box |
+| Keys menu | ↑ ↓ | scroll the menu |
+| Keys menu | g G | jump to the top or bottom |
+| Keys menu | ? Esc q Ctrl-C | close the menu |
+| Tmux | prefix + N | start a session in the project under the highlight |
+| Tmux | prefix + ← → ↑ ↓ | switch panes |
+| Tmux | tmux kill-session -t sassy-code | end the panel, viewer and hidden sessions |
+| Mouse | click | select a session or toggle a project, goal or slice |
+| Mouse | double-click | present a session |
+| Mouse | wheel | move the highlight one row |
+| Mouse | drag a session | move it to a goal, slice or heading in the same project |
+| Mouse | click in a box | pick an item; a click outside cancels |
+| Mouse | Shift-drag | select terminal text; the terminal handles it |
+
+On a session row the tier keys act on its container, and while a filter is
+active they change no stored tier.
 
 `n` starts a new session in the selected project, opening one boxed picker with
 no section headings: the contextual `+ New goal` item on a project heading or
 loose session, `+ New slice` on a goal row or a session inside one (a slice row
 offers none), then one line per installed harness (`π Pi`, `✳ Claude Code`),
 preselected on the inferred harness, with the `+` in the harness index column.
-`j/k`/`↑`/`↓` move (`↑` from the first harness returns to the contextual item),
-`Tab` switches between item and harnesses, `1`–`9` or `Enter` picks, and
-`Esc`/`q`/`Ctrl-C` cancels. A harness item starts at once, loose or inside the
+The box's keys are in the table above; `↑` from the first harness returns to
+the contextual item. A harness item starts at once, loose or inside the
 highlighted container; the Goal item asks for a harness and a name, creates the
 container, and starts inside it. Project and goal rows always open the box; a
 slice row only with more than one harness, and session rows and `prefix + N`
@@ -119,29 +184,69 @@ its slices as a tree (`├` a sibling, `└` the last child). A marker column ho
 one glyph: `⌂` on `Top level` and `✓` on the container the session is in now
 (never a done mark); words start in the name column, and a slice's connector
 sits there too, so names never shift. Done goals and slices are dimmed.
-`j/k`/arrows move, `1`–`9` or `Enter` picks, `Esc`/`q`/`Ctrl-C` cancels. A done
-target reopens and expands, and a running session keeps running. On any other
-row `m` shows a footer warning.
+A done target reopens and expands, and a running session keeps running. On any
+other row `m` shows a footer warning.
 
-`r` reloads every managed Pi session (sends `/reload` and refreshes the list),
+`R` on a session, goal or slice opens the `:` line with `session:rename`,
+`goal:rename` or `slice:rename` and an empty argument; the current name is
+never carried over, so type the fresh one. A blank or whitespace-only name
+refuses without changing anything.
+The rename appends the harness's own title line — `session_info` for Pi,
+`custom-title` for Claude — so the panel and a resumed session show the same
+name; there is no separate local copy. The append is metadata, not a message,
+so a live or mid-turn session can be renamed, and the row updates on the next
+refresh.
+
 `/` filters (auto-expanding groups, goals and slices; it also matches the
-harness name and goal/slice names), `x` marks a session done (`✓`, dimmed and
-sunk below active rows; the footer then reads `x undo`) and `x` again revives
-it, `:` opens the command line, and `q` quits (detaching only; the session keeps
-running). `:goal:create <name>` makes an empty top-level goal in the highlighted
-row's project, and `:slice:create <name>` makes a slice under the highlighted
-goal (or under a highlighted slice's parent); both refuse empty or
-case-insensitive duplicate names under the same parent.
+harness name and goal/slice names), and `x` marks a session done (`✓`, dimmed
+and sunk below active rows; `x` again revives it). `:goal:create <name>` makes
+an empty top-level goal in the highlighted row's project, and
+`:slice:create <name>` makes a slice under the highlighted goal (or under a
+highlighted slice's parent); both refuse empty or case-insensitive duplicate
+names under the same parent. `:session:rename <name>` (or `R` on a session)
+writes the harness title; an empty or whitespace-only name refuses.
 
-On a goal or slice row the footer reads `⏎ toggle  n new  R rename  x done  D
-delete` (or `x undo` once done): `Enter` toggles it, `R` opens the `:` line
-pre-filled with `goal:rename <name>` or `slice:rename <name>`, `x` marks it done
+`D` on a session asks `Delete session '<title>'? y/n` in the footer. Deleting is
+soft: the transcript moves to the trash and can be restored. It refuses, naming
+the reason, while a turn or background work is unresolved, while the transcript
+is unreadable, while the agent runs outside managed panes, or when the process
+snapshot is unavailable. A managed agent is stopped with `SIGTERM` and a short
+wait; a timeout refuses and nothing is moved. A presented session leaves its
+pane as a plain shell, with the pane tag and `current` cleared; a hidden pane is
+removed. The highlight lands where the deleted row stood: on the row below, else
+the row above, else the project heading. A paging row (`… more` / `… show
+fewer`) is never picked (it can disappear when the hidden count drops), and the
+neighbour comes only from the rows as drawn, so a filter or a tier is honored.
+
+`t` opens **Trash** as a project-grouped list: a bold project header starts
+each group, with a divider rule between groups (never before the first) so each
+project reads as its own block without a wasted blank line, then one row per
+entry with aligned title, harness and age columns, newest first inside each
+project and projects in a stable name order. A long
+title is truncated with `…` so it never pushes the harness or age off a narrow
+panel, and the age is right-aligned. Below a separator rule the box's own action
+line reads `⏎ restore  d purge`, driven by the keymap rather than a hard-coded
+hint and wrapped to the panel width. The `/` filter narrows by title, project or
+harness; `Enter` restores and closes, and `d` purges for good and keeps the box
+open. Restoring puts the transcript back at its original path,
+restores its done mark and re-files it in its goal or slice; if that container
+no longer exists, the session comes back loose. Trash entries and their
+transcripts are purged automatically after seven days.
+
+On a goal or slice row the footer lists only that row's actions: `Enter`
+toggles it, `n` starts a session inside it, `R` opens the `:` line with
+`goal:rename` or `slice:rename` and an empty argument, `x` marks it done
 (collapsed, sunk below active siblings; `x` again reopens and expands), and `D`
-asks `Delete goal '<name>'? y/n` or `Delete slice '<name>'? y/n` in the footer;
-only `y` deletes. Deleting a slice flattens its sessions; deleting a goal removes
-its slices and flattens the whole subtree. Sessions are never touched in the
-store: they become loose and stay openable. With an unreadable `goals.json` all
-three refuse with a footer warning. Done session marks live in
+asks `Delete goal '<name>' and N sessions? y/n` or `Delete slice '<name>' and N
+sessions? y/n` in the footer (the clause is dropped at zero); only `y` deletes.
+Deleting a goal or slice cascades through every explicit and inherited session in
+its subtree, done or not: each transcript moves to the trash, then the container
+records go. It is all-or-nothing: if any member is busy, external or unknown, the
+whole delete refuses and names it before anything moves, and a failed move or
+record write moves every transcript back. Restore a member with `t`; its
+container is gone, so it comes back loose in the project with its done mark. With
+an unreadable `goals.json`, `sessions.json` or trash the action refuses with a
+footer warning before the prompt. Done session marks live in
 `~/.sassywares/sassy-code/sessions.json`, keyed by session id; an unreadable
 file hides them and refuses edits without being overwritten. New activity or `x`
 revives. `--list` nests slices under goals and shows done rows with `✓`.
@@ -170,23 +275,20 @@ byte-identical to tmux's default is indistinguishable and will be normalized.
 The panel turns on terminal mouse reporting while it runs; a terminal without
 mouse support simply gets no mouse events, and the keyboard path is unchanged.
 
-- Click a session row to select it. Click the same row again within about 0.4
-  seconds to present it in the viewer.
-- Click a project heading, a goal, or a slice to collapse or expand it.
-- Click a `… N more` row to reveal the next tier, or `… show fewer` to hide one.
-- Scroll the wheel to move the highlight; one notch moves exactly one row, and
-  duplicate events from one notch are debounced. Wheel-up works on every
-  Python/curses build; wheel-down needs 5-button support (`BUTTON5_*`), and the
-  macOS system ncurses has only four buttons, so wheel-down is inert there —
-  best-effort, never emulated.
-- Press on a session row, then release on a goal or slice in the same project to
-  move the session there. Release on that project's heading to make it loose.
-  While the button is down the footer reads `moving <title>…`; releasing
+- A second click on the same session row within about 0.4 seconds presents it;
+  a slower click only selects it.
+- Clicking a `… N more` row reveals the next tier, or `… show fewer` hides one.
+- Scrolling moves the highlight one row per notch, and duplicate events from one
+  notch are debounced. Wheel-up works on every Python/curses build; wheel-down
+  needs 5-button support (`BUTTON5_*`), and the macOS system ncurses has only
+  four buttons, so wheel-down is inert there — best-effort, never emulated.
+- Pressing on a session row and releasing on a goal or slice in the same project
+  moves the session there; releasing on that project's heading makes it loose.
+  While the button is down the footer reads `moving <title>…`. Releasing
   anywhere else — another session, a hint line, the gap between projects, or
   another project — cancels the move.
-- Click a goal or harness item in the `n` box, or a target in the `m` box, to
-  pick it; click outside the box to cancel. A click on the divider in the `n`
-  box does nothing.
+- A click on the divider in the `n` box does nothing, and a click outside a box
+  cancels it.
 
 Hold `Shift` while dragging to select terminal text as usual: the terminal
 handles `Shift`-drag itself, so the panel never sees it. Without `Shift`, a drag

@@ -13,7 +13,7 @@ import uuid
 from dataclasses import replace
 
 from panel import state as _state
-from panel.core import STATUS
+from panel.core import STATUS, clean_name
 
 
 GOAL_HINTS = (
@@ -141,10 +141,7 @@ def mutate_goals(apply):
 
 
 def _clean_goal_name(name: str, noun: str = "goal") -> str:
-    name = " ".join(name.split())
-    if not name:
-        raise _state.GoalError(f"{noun} needs a name")
-    return name
+    return clean_name(name, noun, _state.GoalError)
 
 
 def _record_is_slice(records: list[dict], record: dict) -> bool:
@@ -379,22 +376,37 @@ def toggle_goal_done(cwd: str, goal_id: str) -> bool:
     return mutate_goals(apply)
 
 
+def _doomed_goal_ids(records: list[dict], goal_id: str) -> set[str]:
+    """*goal_id* plus every descendant slice id, cycle-safe."""
+    children, _ = _children_by_parent(
+        records, lambda r: r["id"], _record_parent
+    )
+    doomed, stack = set(), [goal_id]
+    while stack:
+        node = stack.pop()
+        if node in doomed:
+            continue
+        doomed.add(node)
+        stack.extend(x["id"] for x in children.get(node, []))
+    return doomed
+
+
 def delete_goal(cwd: str, goal_id: str) -> None:
-    """Remove a goal and its slices; every session becomes loose (D16)."""
+    """Remove a goal and its slices, leaving their sessions loose (D16)."""
+    return delete_goal_with_members(cwd, goal_id, [])
+
+
+def delete_goal_with_members(
+    cwd: str, goal_id: str, session_ids: list[str]
+) -> None:
+    """One write: unfiled *session_ids*, then remove the goal subtree (P2)."""
 
     def apply(data: dict) -> None:
         records = data["projects"].get(cwd, [])
         _find_goal_in(records, goal_id)
-        children, _ = _children_by_parent(
-            records, lambda r: r["id"], _record_parent
-        )
-        doomed, stack = set(), [goal_id]
-        while stack:
-            node = stack.pop()
-            if node in doomed:
-                continue
-            doomed.add(node)
-            stack.extend(x["id"] for x in children.get(node, []))
+        for session_id in session_ids:
+            _strip_membership(data, cwd, session_id)
+        doomed = _doomed_goal_ids(records, goal_id)
         data["projects"][cwd] = [
             r for r in records if r["id"] not in doomed
         ]
@@ -587,3 +599,100 @@ def goal_members(g: Group, goal: Goal) -> list[Session]:
     by_id = {s.id: s for s in g.sessions}
     found = [by_id[i] for i in dict.fromkeys(goal.sessions) if i in by_id]
     return sorted(found, key=lambda s: s.last_ts, reverse=True)
+
+
+def membership_from(data: dict, cwd: str, session_id: str) -> dict:
+    """Where a session is filed explicitly in parsed *data*.
+
+    Used to roll a delete back exactly; inherited membership is derived and
+    needs no snapshot. A caller that already read goals.json passes the parse
+    so a multi-session delete does not re-read it per member.
+    """
+    goals = data["projects"].get(cwd, [])
+    return {
+        "goals": [
+            g["id"] for g in goals
+            if session_id in g.get("sessions", [])
+        ],
+        "loose": session_id in _loose_ids(data, cwd),
+    }
+
+
+def session_membership(cwd: str, session_id: str) -> dict:
+    """Where a session is filed explicitly: (goal ids, explicit-loose flag)."""
+    return membership_from(read_goals_file(), cwd, session_id)
+
+
+def _strip_membership(data: dict, cwd: str, session_id: str) -> bool:
+    """Drop a session from every goal/slice and the loose list; wrote anything?"""
+    changed = False
+    for g in data["projects"].get(cwd, []):
+        sessions = g.get("sessions", [])
+        remaining = [i for i in sessions if i != session_id]
+        if len(remaining) != len(sessions):
+            g["sessions"] = remaining
+            changed = True
+    if session_id in _loose_ids(data, cwd):
+        _remove_loose(data, cwd, session_id)
+        changed = True
+    return changed
+
+
+def remove_session_membership(cwd: str, session_id: str):
+    """Drop a session from every goal/slice and the loose list in a project."""
+    def apply(data: dict) -> object:
+        return (
+            True if _strip_membership(data, cwd, session_id)
+            else _state.NO_WRITE
+        )
+
+    return mutate_goals(apply)
+
+
+def restore_session_membership(cwd: str, session_id: str, snap: dict) -> None:
+    """Put a session back exactly where *snap* recorded it (delete rollback)."""
+    def apply(data: dict) -> None:
+        _strip_membership(data, cwd, session_id)
+        by_id = {g["id"]: g for g in data["projects"].get(cwd, [])}
+        for goal_id in snap.get("goals", []):
+            record = by_id.get(goal_id)
+            if record is not None:
+                record.setdefault("sessions", []).append(session_id)
+        if snap.get("loose"):
+            _add_loose(data, cwd, session_id)
+
+    mutate_goals(apply)
+
+
+def file_session_on_restore(cwd: str, session_id: str, goal_id: str) -> None:
+    """Restore a trashed session to *goal_id*, or mark it explicitly loose (D16).
+
+    An existing container is reopened and expanded so the restored row is
+    visible. When the recorded container is gone, or the session was at top
+    level before deletion, it comes back explicitly loose: a restore never
+    lets `inherit_goal_members()` refile it under a parent's container.
+    """
+    def apply(data: dict) -> None:
+        _strip_membership(data, cwd, session_id)
+        goals = data["projects"].get(cwd, [])
+        record = next((g for g in goals if goal_id and g["id"] == goal_id), None)
+        if record is None:
+            _add_loose(data, cwd, session_id)
+            return
+        sessions = record.setdefault("sessions", [])
+        if session_id not in sessions:
+            sessions.append(session_id)
+        record["done"] = False
+        record["collapsed"] = False
+        # A slice can sit under a collapsed goal; expand the chain so the
+        # restored row is actually visible when the main filter shows it.
+        by_id = {g["id"]: g for g in goals}
+        seen = set()
+        parent = record.get("parent", "")
+        while parent and parent not in seen and parent in by_id:
+            seen.add(parent)
+            ancestor = by_id[parent]
+            ancestor["collapsed"] = False
+            parent = ancestor.get("parent", "")
+
+    mutate_goals(apply)

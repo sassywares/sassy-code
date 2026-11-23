@@ -9,9 +9,12 @@ would detach the client.
 from __future__ import annotations
 
 import curses
+import os
 
-from panel import actions as _actions, core, goals as _goals, mouse as _mouse
-from panel import panes as _panes, state as _state
+from panel import actions as _actions, core, goals as _goals
+from panel import keymap as _keymap, mouse as _mouse
+from panel import panes as _panes, state as _state, trash as _trash
+from panel import view as _view
 from panel.core import Goal, Group, Session
 
 
@@ -223,6 +226,7 @@ def new_box_mouse_pick(state: dict, index: int, installed: list[str]):
 
 _PICKER_STAY = object()
 PICKER_DIVIDER = "divider"
+PICKER_HEADING = "heading"
 
 
 def divider_text(width: int) -> str:
@@ -236,7 +240,7 @@ def divider_text(width: int) -> str:
 
 
 def run_picker(stdscr, state, title: str, lines_for, step, fallback,
-               mouse_pick=None):
+               mouse_pick=None, footer_for=None):
     """Draw a one-line-per-item box until *step* ends it; return its result.
 
     *lines_for(state)* returns `(lines, selected)`, where each line is
@@ -245,9 +249,12 @@ def run_picker(stdscr, state, title: str, lines_for, step, fallback,
     result)`, with `_PICKER_STAY` to keep looping or the value to return (None
     cancels). A `PICKER_DIVIDER` line is a real rule drawn edge to edge at the
     box origin; it takes no part in the width, is never selected and is not
-    pickable. If the box cannot be drawn (tiny terminal, or curses raises),
-    return *fallback* without acting on a choice nobody saw. Ctrl-C anywhere
-    cancels like Esc/q, whether curses reports it as key 3 or raises
+    pickable. *footer_for(state)* optionally returns `(text, attribute)` lines
+    pinned below the scrolling items and above the bottom border, with a rule
+    of its own drawn between the list and the hints; neither the rule nor the
+    hints are pickable. If the box cannot be drawn (tiny terminal, or curses
+    raises), return *fallback* without acting on a choice nobody saw. Ctrl-C
+    anywhere cancels like Esc/q, whether curses reports it as key 3 or raises
     KeyboardInterrupt (ISIG on). Only a left click (or a press and its release)
     picks; the wheel and other buttons are ignored, so scrolling over a box
     never acts on the item under it.
@@ -258,13 +265,19 @@ def run_picker(stdscr, state, title: str, lines_for, step, fallback,
             lines, selected = lines_for(state)
             if not lines:
                 return fallback  # nothing to draw: cancel like a tiny box
+            footer = list(footer_for(state)) if footer_for is not None else []
+            separator = 1 if footer else 0  # a rule above the pinned hints
             h, w = stdscr.getmaxyx()  # re-read: the terminal may resize
-            rows = min(len(lines), h - 2)
+            rows = min(
+                len(lines),
+                max(0, h - 2 - len(footer) - separator),
+            )
             content = [
                 core.display_width(text)
                 for text, _attr, *kind in lines
                 if (kind[0] if kind else "") != PICKER_DIVIDER
             ]
+            content.extend(core.display_width(text) for text, _attr in footer)
             wanted = max(content or [0]) + 3
             width = min(w, wanted)
             if rows < 1 or width < 6:
@@ -273,12 +286,11 @@ def run_picker(stdscr, state, title: str, lines_for, step, fallback,
             # line never ends flush against the right border.
             inner = width - 2 - (1 if width < wanted else 0)
             top = max(0, min(selected - rows // 2, len(lines) - rows))
-            box_y = max(0, (h - rows - 2) // 2)
+            height = rows + 2 + len(footer) + separator
+            box_y = max(0, (h - height) // 2)
             box_x = max(0, (w - width) // 2)
             try:
-                win = curses.newwin(
-                    rows + 2, width, box_y, box_x,
-                )
+                win = curses.newwin(height, width, box_y, box_x)
                 # Read keys from the box itself: stdscr.getch() would
                 # implicitly repaint the stale panel over it after a resize.
                 win.keypad(True)
@@ -294,6 +306,12 @@ def run_picker(stdscr, state, title: str, lines_for, step, fallback,
                         continue
                     win.addnstr(i + 1, 1, core.fit_cols(text, inner),
                                 width - 2, attr)
+                if separator:
+                    win.addnstr(rows + 1, 0, divider_text(width), width,
+                                curses.A_DIM)
+                for i, (text, attr) in enumerate(footer):
+                    win.addnstr(rows + 1 + separator + i, 1,
+                                core.fit_cols(text, inner), width - 2, attr)
                 win.refresh()
             except curses.error:
                 return fallback
@@ -319,7 +337,7 @@ def run_picker(stdscr, state, title: str, lines_for, step, fallback,
                 else:
                     continue  # a wheel notch or another button: ignore it
                 inside, rel = _mouse.picker_click(
-                    rows, box_y, box_x, rows + 2, width, mx, my
+                    rows, box_y, box_x, height, width, mx, my
                 )
                 if not inside:
                     return None  # a click outside either box cancels it
@@ -603,3 +621,322 @@ def move_box_mouse_pick(state: dict, index: int):
         return _PICKER_STAY
     kind, goal, _ = state["targets"][target]
     return kind, goal
+
+
+TRASH_TITLE = "Trash"
+TRASH_DEFAULT_WIDTH = 80  # the panel is narrow; tests read the same default
+
+
+def trash_box_start(entries: list[dict]) -> dict:
+    return {
+        "entries": list(entries),
+        "index": 0,
+        "filter": "",
+        "editing": False,
+        "draft": "",
+        "confirm": None,
+        "notice": "",
+    }
+
+
+def _trash_project(entry: dict) -> str:
+    """The project label for an entry: its working directory's basename."""
+    cwd = str(entry.get("cwd", "")).rstrip("/")
+    return os.path.basename(cwd) or cwd or "?"
+
+
+def _trash_group_key(entry: dict) -> tuple[str, str]:
+    """Deterministic project grouping: display label, then the full path."""
+    cwd = str(entry.get("cwd", "")).rstrip("/")
+    return _trash_project(entry).casefold(), cwd
+
+
+def _trash_title(entry: dict) -> str:
+    return str(entry.get("title", "")) or "(untitled)"
+
+
+def _trash_harness(entry: dict) -> str:
+    return _trash._harness_label(entry) or "?"
+
+
+def _trash_age(entry: dict) -> str:
+    return core.rel_time(float(entry.get("deleted_at", 0)))
+
+
+def _grouped_entries(entries: list[dict]) -> list[dict]:
+    """Project groups in label order, newest entry first inside each group."""
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for entry in entries:
+        groups.setdefault(_trash_group_key(entry), []).append(entry)
+    ordered: list[dict] = []
+    for key in sorted(groups):
+        ordered.extend(sorted(
+            groups[key],
+            key=lambda e: float(e.get("deleted_at", 0)),
+            reverse=True,
+        ))
+    return ordered
+
+
+def trash_visible(state: dict) -> list[dict]:
+    return _grouped_entries(
+        _trash.filtered_entries(state["entries"], state["filter"])
+    )
+
+
+def _trash_header(state: dict) -> str:
+    """The header line shown above the entries, or "" when there is none."""
+    if state.get("confirm"):
+        title = state["confirm"].get("title") or "session"
+        return f" Purge '{title}'? y/n"
+    if state.get("editing"):
+        return f" filter: {state['draft']}"
+    if state.get("filter"):
+        return f" filter: {state['filter']}"
+    return ""
+
+
+def _trash_width(state: dict) -> int:
+    """The live panel width, else the width the box was started with."""
+    screen = state.get("screen")
+    if screen is not None:
+        try:
+            return max(1, screen.getmaxyx()[1])
+        except (AttributeError, TypeError):
+            pass
+    width = state.get("width")
+    return TRASH_DEFAULT_WIDTH if width is None else width
+
+
+def _trash_columns(
+    entries: list[dict], width: int
+) -> tuple[int, int, int, str]:
+    """Column widths for one trash draw: title, harness, age, gap.
+
+    The title takes the leftover space and is the first column to shrink, so
+    the harness and age never disappear behind a long title. Below the width
+    where all three fit naturally, the harness keeps what is left after the
+    title's four-column floor and the age keeps its own.
+    """
+    available = max(6, width - 4)
+    age_w = max((core.display_width(_trash_age(e)) for e in entries),
+                default=1)
+    harness_nat = max((core.display_width(_trash_harness(e)) for e in entries),
+                      default=1)
+    gap = "  " if available >= 24 else " "
+    gaps = core.display_width(gap) * 2
+    age_w = min(age_w, max(1, available - gaps - 2))
+    budget = max(2, available - age_w - gaps)
+    title_floor = min(4, max(1, budget // 3))
+    if budget >= harness_nat + title_floor:
+        return budget - harness_nat, harness_nat, age_w, gap
+    return title_floor, budget - title_floor, age_w, gap
+
+
+def _trash_row(entry: dict, columns: tuple[int, int, int, str]) -> str:
+    """One aligned entry row: title, harness and right-aligned age."""
+    title_w, harness_w, age_w, gap = columns
+    title = core.fit_cols(_trash_title(entry), title_w)
+    harness = core.fit_cols(_trash_harness(entry), harness_w)
+    age = _trash_age(entry)
+    if core.display_width(age) > age_w:
+        age = core.truncate_cols(age, age_w)
+    return (
+        f" {title}{gap}{harness}{gap}"
+        f"{' ' * max(0, age_w - core.display_width(age))}{age}"
+    )
+
+
+def _trash_group_line(entry: dict, width: int) -> str:
+    """The header for a project group: the label alone, cut if it must be."""
+    return " " + core.fit_cols(_trash_project(entry), max(1, width - 4))
+
+
+def _clamped_index(state: dict, visible: list[dict]) -> int:
+    """The selected index, clamped into *visible* (0 when it is empty)."""
+    if not visible:
+        return 0
+    return max(0, min(state["index"], len(visible) - 1))
+
+
+def _trash_layout(
+    state: dict,
+) -> tuple[list[tuple], int, dict[int, int]]:
+    """Draw the trash: lines, selected line index, line -> entry index map.
+
+    Entries are grouped by project; a bold project header starts each group,
+    with a `PICKER_DIVIDER` rule between groups, so each project reads as its
+    own block without an empty line. Never a rule above the first header, and
+    no rule in the empty or empty-filter states. Neither the rule nor the
+    header is selectable or pickable. The map records only entry lines so the
+    mouse handler can ignore rules, headers and notices without guessing rows.
+    """
+    visible = trash_visible(state)
+    header = _trash_header(state)
+    lines: list[tuple] = []
+    if header:
+        lines.append((header, curses.A_DIM))
+    if state.get("notice"):
+        lines.insert(0, (state["notice"], curses.A_DIM))
+    if not visible:
+        text = (
+            " no deleted sessions"
+            if not state["entries"]
+            else f" no matches for '{state['filter']}'"
+        )
+        lines.append((text, curses.A_DIM))
+        return lines, len(lines) - 1, {}
+    width = _trash_width(state)
+    columns = _trash_columns(visible, width)
+    selected = _clamped_index(state, visible)
+    selected_line = 0
+    rows: dict[int, int] = {}
+    previous: tuple[str, str] | None = None
+    for i, entry in enumerate(visible):
+        key = _trash_group_key(entry)
+        if key != previous:
+            if previous is not None:
+                # One rule between groups: never above the first header.
+                lines.append(("", 0, PICKER_DIVIDER))
+            lines.append((
+                _trash_group_line(entry, width),
+                curses.A_BOLD,
+                PICKER_HEADING,
+            ))
+            previous = key
+        line = len(lines)
+        rows[line] = i
+        if i == selected:
+            selected_line = line
+        lines.append(
+            (_trash_row(entry, columns),
+             curses.A_REVERSE if i == selected else 0)
+        )
+    return lines, selected_line, rows
+
+
+def trash_lines(state: dict) -> tuple[list[tuple], int]:
+    """Drawn trash lines and the selected line index; empty text says so."""
+    lines, selected, _rows = _trash_layout(state)
+    return lines, selected
+
+
+def trash_footer(state: dict) -> list[tuple[str, int]]:
+    """The pinned action line, read from the keymap's Trash entry scope.
+
+    It wraps at the trash width like the main footer, so a narrow panel reads
+    every hint on its own line instead of clipping the last one. `run_picker`
+    draws a separator rule between the list and these lines.
+    """
+    items = _keymap.footer_for_scope("Trash entry")
+    return [
+        (line, curses.A_DIM)
+        for line in _view.footer_lines(items, max(1, _trash_width(state) - 2))
+    ]
+
+
+def trash_box_key(state: dict, ch) -> tuple[dict, str]:
+    """Apply one key to the trash box; (state, action).
+
+    Actions: "" stays, "cancel" closes, "restore" restores the selected entry,
+    "purge" is the `y` of a purge confirmation. Ctrl-C/Esc/q close the box,
+    except while editing the `/` filter or confirming a purge.
+    """
+    state = dict(state)
+    state["notice"] = ""
+    if state.get("editing"):
+        if ch in (27, 3):
+            state["editing"] = False
+            state["draft"] = state["filter"]
+            return state, ""
+        if ch in (curses.KEY_ENTER, 10, 13, "\n", "\r"):
+            state["filter"] = state["draft"].strip()
+            state["editing"] = False
+            state["index"] = 0
+            return state, ""
+        if ch in (curses.KEY_BACKSPACE, 127, 8, "\x7f", "\b"):
+            state["draft"] = state["draft"][:-1]
+            return state, ""
+        if isinstance(ch, str) and ch.isprintable():
+            state["draft"] += ch
+            return state, ""
+        return state, ""
+    if state.get("confirm") is not None:
+        if ch in (ord("y"), ord("Y")):
+            return state, "purge"
+        if ch in (ord("n"), ord("N"), 27, 3, ord("q")):
+            state["confirm"] = None
+        return state, ""
+    if ch in (3, 27, ord("q")):
+        return state, "cancel"
+    visible = trash_visible(state)
+    if ch == ord("/"):
+        state["editing"] = True
+        state["draft"] = state["filter"]
+        return state, ""
+    if ch in (curses.KEY_UP, ord("k")):
+        state["index"] = max(0, state["index"] - 1)
+        return state, ""
+    if ch in (curses.KEY_DOWN, ord("j")):
+        state["index"] = min(max(0, len(visible) - 1), state["index"] + 1)
+        return state, ""
+    if ch in (curses.KEY_ENTER, 10, 13) and visible:
+        state["index"] = _clamped_index(state, visible)
+        return state, "restore"
+    if ch == ord("d") and visible:
+        state["index"] = _clamped_index(state, visible)
+        state["confirm"] = visible[state["index"]]
+        return state, ""
+    return state, ""
+
+
+def trash_box_mouse_pick(state: dict, index: int):
+    """Select the clicked entry; a click never restores or purges (D19).
+
+    The line -> entry map comes from the same draw, so headers, notices and
+    section rules are never mistaken for a row.
+    """
+    _lines, _selected, rows = _trash_layout(state)
+    if index in rows:
+        state["index"] = rows[index]
+    return _PICKER_STAY
+
+
+def _drop_state_entry(state: dict, entry: dict) -> None:
+    state["entries"] = _trash._remove_entry(entry, state["entries"])
+    state["index"] = _clamped_index(state, trash_visible(state))
+
+
+def trash_box(stdscr, entries: list[dict]) -> dict | None:
+    """The `t` box: filtered list; Enter restores, `d` purges, Esc closes.
+
+    Returns the restored entry (the caller reloads groups and selects it), or
+    None on cancel. A purge stays in the box, with a notice on failure.
+    """
+    state = trash_box_start(entries)
+    state["screen"] = stdscr  # the layout reads the live panel width
+
+    def step(state, ch):
+        state, action = trash_box_key(state, ch)
+        if action == "cancel":
+            return state, None
+        if action == "restore":
+            visible = trash_visible(state)
+            if not visible:
+                return state, _PICKER_STAY
+            return state, visible[_clamped_index(state, visible)]
+        if action == "purge":
+            entry = state.get("confirm")
+            state["confirm"] = None
+            if entry is not None:
+                ok, message = _trash.purge_entry(entry)
+                state["notice"] = message
+                if ok:
+                    _drop_state_entry(state, entry)
+            return state, _PICKER_STAY
+        return state, _PICKER_STAY
+
+    return run_picker(
+        stdscr, state, TRASH_TITLE, trash_lines, step, None,
+        trash_box_mouse_pick, footer_for=trash_footer,
+    )

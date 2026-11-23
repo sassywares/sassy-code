@@ -41,10 +41,20 @@ ARROW_COL = {depth: NAME_COL[depth] - 2 for depth in NAME_COL if depth}
 
 BG_SESSION = "sassy-code-bg"
 DEFAULT_HARNESS = "pi"
-# Small, quiet marks that say which harness owns a session.
+# Small, quiet marks that say which harness owns a session. `title` is the
+# native line a rename appends and the field the parser reads back, so the
+# writer never branches on the harness.
 HARNESS = {
-    "pi": {"label": "Pi", "glyph": "π"},
-    "claude": {"label": "Claude Code", "glyph": "✳"},
+    "pi": {
+        "label": "Pi",
+        "glyph": "π",
+        "title": {"type": "session_info", "field": "name"},
+    },
+    "claude": {
+        "label": "Claude Code",
+        "glyph": "✳",
+        "title": {"type": "custom-title", "field": "customTitle"},
+    },
 }
 HARNESS_KEYS = tuple(HARNESS)
 # Internal panel key: `n` without the new-session box. `--new-session` sends it
@@ -239,6 +249,14 @@ def text_of(content) -> str:
                 parts.append(str(b.get("text", "")))
         return " ".join(parts)
     return ""
+
+
+def clean_name(name: str, noun: str, error: type[Exception]) -> str:
+    """Collapse whitespace and refuse an empty *name* with *error*."""
+    name = " ".join(name.split())
+    if not name:
+        raise error(f"{noun} needs a name")
+    return name
 
 
 def clean_preview(txt: str) -> str:
